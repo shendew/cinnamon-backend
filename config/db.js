@@ -1,9 +1,14 @@
-const { createClient } = require('@supabase/supabase-js');
-require('dotenv').config();
+import { drizzle } from 'drizzle-orm/postgres-js';
+import postgres from 'postgres';
+import * as schema from '../src/db/schema.js';
 
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_KEY;
+const connectionString = process.env.DATABASE_URL;
 
-const supabase = createClient(supabaseUrl, supabaseKey);
+if (!connectionString) {
+  throw new Error('DATABASE_URL is not set');
+}
 
-module.exports = supabase;
+const client = postgres(connectionString, {
+  ssl: 'require',
+});
+export const db = drizzle(client, { schema });
