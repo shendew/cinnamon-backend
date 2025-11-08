@@ -1,24 +1,15 @@
-const express = require('express');
-require('dotenv').config();
-const supabase = require('./config/db');
-const jwt = require('jsonwebtoken');
-const auth = require('./middleware/auth');
+import express from "express";
+import "dotenv/config";
+import userRoutes from "./routes/user.js";
+import farmerRoutes from "./routes/farmer.js";
 
 const app = express();
 app.use(express.json());
 
-const port = process.env.PORT || 3000;
+app.use("/api", userRoutes);
+app.use("/api/farmer", farmerRoutes);
 
-app.get('/test-db', async (req, res) => {
-  try {
-    const { data, error } = await supabase.rpc('get_current_timestamp');
-    if (error) throw error;
-    res.json(data);
-  } catch (err) {
-    console.error(err);
-    res.status(500).send('Error connecting to the database');
-  }
-});
+const port = process.env.PORT || 3000;
 
 app.listen(port, () => {
   console.log(`Server is running on port ${port}`);
