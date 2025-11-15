@@ -56,3 +56,16 @@ export const cultivation = pgTable('cultivation', {
   created_at: timestamptz('created_at').defaultNow(),
   updated_at: timestamptz('updated_at').defaultNow()
 });
+
+export const harvest = pgTable('harvest', {
+  harvest_id: serial('harvest_id').primaryKey(),
+  farm_id: serial('farm_id').references(() => farms.farm_id, { onDelete: 'cascade' }).notNull(),
+  batch_id: serial('batch_id').references(() => cultivation.batch_id, { onDelete: 'cascade' }).notNull(),
+  harvest_date: date('harvest_date').notNull(),
+  harvest_method: text('harvest_method').notNull(),
+  quantity: numeric('quantity').notNull(),
+  moisture_content: numeric('moisture_content').notNull(),
+  flagged: text('flagged').notNull(),
+  created_at: timestamptz('created_at').defaultNow(),
+  updated_at: timestamptz('updated_at').defaultNow()
+});

@@ -1,7 +1,7 @@
 
 import express from 'express';
 const router = express.Router();
-import { registerFarmer, loginFarmer, createFarm, createCultivation } from '../controllers/farmerController.js';
+import { registerFarmer, loginFarmer, createFarm, createCultivation, createHarvest } from '../controllers/farmerController.js';
 import { protect } from '../middleware/auth.js';
 import { check } from 'express-validator';
 
@@ -42,5 +42,20 @@ router.post('/cultivations', protect, [
     check('no_of_trees', 'Number of trees is required').not().isEmpty(),
     check('no_of_trees', 'Number of trees must be a valid integer').isInt({ min: 1 })
 ], createCultivation);
+
+router.post('/harvests', protect, [
+    check('farm_id', 'Farm ID is required').not().isEmpty(),
+    check('farm_id', 'Farm ID must be a valid number').isInt({ min: 1 }),
+    check('batch_id', 'Batch ID is required').not().isEmpty(),
+    check('batch_id', 'Batch ID must be a valid number').isInt({ min: 1 }),
+    check('harvest_date', 'Harvest date is required').not().isEmpty(),
+    check('harvest_date', 'Harvest date must be a valid date').isISO8601(),
+    check('harvest_method', 'Harvest method is required').not().isEmpty(),
+    check('quantity', 'Quantity is required').not().isEmpty(),
+    check('quantity', 'Quantity must be a valid number').isFloat({ min: 0 }),
+    check('moisture_content', 'Moisture content is required').not().isEmpty(),
+    check('moisture_content', 'Moisture content must be a valid number').isFloat({ min: 0 }),
+    check('flagged', 'Flagged status is required').not().isEmpty()
+], createHarvest);
 
 export default router;

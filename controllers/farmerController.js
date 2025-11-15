@@ -1,5 +1,5 @@
 import { db } from '../config/db.js';
-import { user, farmer_profile, farms, cultivation } from '../src/db/schema.js';
+import { user, farmer_profile, farms, cultivation, harvest } from '../src/db/schema.js';
 import { eq, and } from 'drizzle-orm';
 import bcrypt from 'bcrypt';
 import { validationResult } from 'express-validator';
@@ -274,6 +274,104 @@ export const createCultivation = async (req, res) => {
         res.status(500).json({ 
             success: false,
             message: "Failed to create cultivation record", 
+            error: error.message 
+        });
+    }
+};
+
+export const createHarvest = async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(400).json({ 
+            success: false,
+            errors: errors.array() 
+        });
+    }
+
+    try {
+        // Verify user is a farmer (handle both string and number types). Needed when debugging.
+        const userRoleId = Number(req.user.role_id);
+        
+        if (isNaN(userRoleId) || userRoleId !== 1) {
+            console.error('Role check failed:', {
+                role_id: req.user.role_id,
+                type: typeof req.user.role_id,
+                converted: userRoleId,
+                user_id: req.user.user_id
+            });
+            return res.status(403).json({ 
+                success: false,
+                message: 'Only farmers can create harvest records. Please ensure you logged in as a farmer.'
+            });
+        }
+
+        const farmerProfiles = await db.select()
+            .from(farmer_profile)
+            .where(eq(farmer_profile.user_id, req.user.user_id));
+
+        if (farmerProfiles.length === 0) {
+            return res.status(404).json({ 
+                success: false,
+                message: 'Farmer profile not found' 
+            });
+        }
+
+        const farmerId = farmerProfiles[0].farmer_id;
+        const { farm_id, batch_id, harvest_date, harvest_method, quantity, moisture_content, flagged } = req.body;
+
+        // Verify that the batch exists and belongs to this farmer's farm
+        const batchRecords = await db.select()
+            .from(cultivation)
+            .where(and(
+                eq(cultivation.batch_id, parseInt(batch_id)),
+                eq(cultivation.farmer_id, farmerId),
+                eq(cultivation.farm_id, parseInt(farm_id))
+            ));
+
+        if (batchRecords.length === 0) {
+            return res.status(403).json({ 
+                success: false,
+                message: 'Batch not found or you do not have permission to create harvest for this batch' 
+            });
+        }
+
+        // Verify that the farm belongs to this farmer
+        const farmRecords = await db.select()
+            .from(farms)
+            .where(and(
+                eq(farms.farm_id, parseInt(farm_id)),
+                eq(farms.farmer_id, farmerId)
+            ));
+
+        if (farmRecords.length === 0) {
+            return res.status(403).json({ 
+                success: false,
+                message: 'Farm not found or you do not have permission to create harvest for this farm' 
+            });
+        }
+
+        // Create harvest record
+        // Note: created_at and updated_at are handled by database defaults
+        const newHarvest = await db.insert(harvest).values({
+            farm_id: parseInt(farm_id),
+            batch_id: parseInt(batch_id),
+            harvest_date,
+            harvest_method,
+            quantity: parseFloat(quantity),
+            moisture_content: parseFloat(moisture_content),
+            flagged
+        }).returning();
+
+        res.status(201).json({
+            success: true,
+            message: 'Harvest record created successfully',
+            harvest: newHarvest[0]
+        });
+    } catch (error) {
+        console.error("Error creating harvest:", error);
+        res.status(500).json({ 
+            success: false,
+            message: "Failed to create harvest record", 
             error: error.message 
         });
     }
