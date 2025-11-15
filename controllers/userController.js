@@ -148,7 +148,29 @@ export const updateUserProfile = async (req, res) => {
 
     try {
         const { name, email, phone } = req.body;
-        const updatedUser = await db.update(user).set({ name, email, phone, updated_at: new Date() }).where(eq(user.user_id, req.user.user_id)).returning();
+
+        // Check if email is being changed and if it already exists
+        if (email && email !== req.user.email) {
+            const emailExists = await db.select().from(user).where(eq(user.email, email));
+            if (emailExists.length > 0) {
+                return res.status(400).json({ 
+                    success: false,
+                    message: 'Email already exists' 
+                });
+            }
+        }
+
+        const updatedUser = await db.update(user)
+            .set({ name, email, phone, updated_at: new Date() })
+            .where(eq(user.user_id, req.user.user_id))
+            .returning();
+
+        if (!updatedUser || updatedUser.length === 0) {
+            return res.status(404).json({ 
+                success: false,
+                message: 'User not found' 
+            });
+        }
 
         const sanitizedUser = sanitizeUser(updatedUser[0]);
         res.json({
