@@ -1,6 +1,6 @@
 import { db } from '../config/db.js';
-import { user, farmer_profile, farms, cultivation } from '../src/db/schema.js';
-import { eq, and } from 'drizzle-orm';
+import { user, farmer_profile, farms, cultivation, harvest, main } from '../src/db/schema.js';
+import { eq, and, sql } from 'drizzle-orm';
 import bcrypt from 'bcrypt';
 import { validationResult } from 'express-validator';
 import { generateToken } from '../utils/jwt.js';
@@ -205,7 +205,7 @@ export const createCultivation = async (req, res) => {
     }
 
     try {
-        // Verify user is a farmer (handle both string and number types). Needed when debugging.
+        // Verify user is a farmer (handle both string and number types).
         const userRoleId = Number(req.user.role_id);
         
         if (isNaN(userRoleId) || userRoleId !== 1) {
@@ -233,7 +233,7 @@ export const createCultivation = async (req, res) => {
         }
 
         const farmerId = farmerProfiles[0].farmer_id;
-        const { farm_id, date_of_planting, seeding_source, type_of_fertilizer, pesticides, organic_certification, expected_harvest_date, no_of_trees } = req.body;
+        const { batch_no, farm_id, date_of_planting, seeding_source, type_of_fertilizers, pesticides, organic_certification, expected_harvest_date, no_of_trees } = req.body;
 
         // Verify that the farm belongs to this farmer
         const farmRecords = await db.select()
@@ -250,30 +250,230 @@ export const createCultivation = async (req, res) => {
             });
         }
 
-        // Create cultivation record
-        // Note: created_at and updated_at are handled by database defaults
-        const newCultivation = await db.insert(cultivation).values({
-            farm_id: parseInt(farm_id),
-            farmer_id: farmerId,
-            date_of_planting,
-            seeding_source,
-            type_of_fertilizer,
-            pesticides,
-            organic_certification,
-            expected_harvest_date,
-            no_of_trees: parseInt(no_of_trees)
-        }).returning();
+        // Check if batch_no already exists
+        const existingBatch = await db.select()
+            .from(main)
+            .where(eq(main.batch_no, batch_no));
+
+        if (existingBatch.length > 0) {
+            return res.status(400).json({ 
+                success: false,
+                message: 'Batch number already exists' 
+            });
+        }
+
+        // Create cultivation record in a transaction
+        const result = await db.transaction(async (tx) => {
+            // Step 1: Create main record first with batch_no, farm_id, farmer_id, is_harvested=false
+            // These fields will be updated later when harvest and collection records are created
+            await tx.insert(main).values({
+                batch_no: batch_no,
+                farm_id: farm_id,
+                farmer_id: farmerId,
+                is_harvested: false
+            });
+
+            // Step 2: Create cultivation record referencing batch_no
+            const newCultivation = await tx.insert(cultivation).values({
+                batch_no: batch_no,
+                date_of_planting,
+                seeding_source,
+                type_of_fertilizers,
+                pesticides,
+                organic_certification,
+                expected_harvest_date,
+                no_of_trees: no_of_trees
+            }).returning();
+
+            // Step 3: Update main table with cultivation_id
+            await tx.update(main)
+                .set({ 
+                    cultivation_id: newCultivation[0].cultivation_id,
+                    updated_at: sql`NOW()`
+                })
+                .where(eq(main.batch_no, batch_no));
+
+            return newCultivation[0];
+        });
 
         res.status(201).json({
             success: true,
             message: 'Cultivation record created successfully',
-            cultivation: newCultivation[0]
+            cultivation: result,
+            batch_no: batch_no
         });
     } catch (error) {
         console.error("Error creating cultivation:", error);
         res.status(500).json({ 
             success: false,
             message: "Failed to create cultivation record", 
+            error: error.message 
+        });
+    }
+};
+
+export const createHarvest = async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(400).json({ 
+            success: false,
+            errors: errors.array() 
+        });
+    }
+
+    try {
+        // Verify user is a farmer (handle both string and number types).
+        const userRoleId = Number(req.user.role_id);
+        
+        if (isNaN(userRoleId) || userRoleId !== 1) {
+            console.error('Role check failed:', {
+                role_id: req.user.role_id,
+                type: typeof req.user.role_id,
+                converted: userRoleId,
+                user_id: req.user.user_id
+            });
+            return res.status(403).json({ 
+                success: false,
+                message: 'Only farmers can create harvest records. Please ensure you logged in as a farmer.'
+            });
+        }
+
+        const farmerProfiles = await db.select()
+            .from(farmer_profile)
+            .where(eq(farmer_profile.user_id, req.user.user_id));
+
+        if (farmerProfiles.length === 0) {
+            return res.status(404).json({ 
+                success: false,
+                message: 'Farmer profile not found' 
+            });
+        }
+
+        const farmerId = farmerProfiles[0].farmer_id;
+        const { batch_no, harvest_date, harvest_method, quantity } = req.body;
+
+        // Verify that the batch exists in main table and belongs to this farmer
+        const batchRecords = await db.select()
+            .from(main)
+            .where(and(
+                eq(main.batch_no, batch_no),
+                eq(main.farmer_id, farmerId)
+            ));
+
+        if (batchRecords.length === 0) {
+            return res.status(403).json({ 
+                success: false,
+                message: 'Batch not found or you do not have permission to create harvest for this batch' 
+            });
+        }
+
+        // Check if already harvested
+        if (batchRecords[0].is_harvested === true) {
+            return res.status(400).json({ 
+                success: false,
+                message: 'This batch has already been harvested' 
+            });
+        }
+
+        // Create harvest record in a transaction
+        const result = await db.transaction(async (tx) => {
+            // Step 1: Create harvest record
+            const newHarvest = await tx.insert(harvest).values({
+                batch_no: batch_no,
+                harvest_date,
+                harvest_method,
+                quantity: parseFloat(quantity)
+            }).returning();
+
+            // Step 2: Update main table with harvest_id, is_harvested=true, and harvested_quantity
+            await tx.update(main)
+                .set({ 
+                    harvest_id: newHarvest[0].harvest_id,
+                    is_harvested: true,
+                    harvested_quantity: parseFloat(quantity),
+                    updated_at: sql`NOW()`
+                })
+                .where(eq(main.batch_no, batch_no));
+
+            return newHarvest[0];
+        });
+
+        res.status(201).json({
+            success: true,
+            message: 'Harvest record created successfully',
+            harvest: result,
+            batch_no: batch_no
+        });
+    } catch (error) {
+        console.error("Error creating harvest:", error);
+        res.status(500).json({ 
+            success: false,
+            message: "Failed to create harvest record", 
+            error: error.message 
+        });
+    }
+};
+
+export const getFarmerProfile = async (req, res) => {
+    try {
+        // Verify user is a farmer (handle both string and number types). Needed when debugging.
+        const userRoleId = Number(req.user.role_id);
+        
+        if (isNaN(userRoleId) || userRoleId !== 1) {
+            return res.status(403).json({ 
+                success: false,
+                message: 'Only farmers can access farmer profile' 
+            });
+        }
+
+        // Get user information
+        const users = await db.select()
+            .from(user)
+            .where(eq(user.user_id, req.user.user_id));
+
+        if (users.length === 0) {
+            return res.status(404).json({ 
+                success: false,
+                message: 'User not found' 
+            });
+        }
+
+        // Get farmer profile information
+        const farmerProfiles = await db.select()
+            .from(farmer_profile)
+            .where(eq(farmer_profile.user_id, req.user.user_id));
+
+        if (farmerProfiles.length === 0) {
+            return res.status(404).json({ 
+                success: false,
+                message: 'Farmer profile not found' 
+            });
+        }
+
+        // Combine user and farmer profile data
+        const userData = sanitizeUser(users[0]);
+        const farmerData = farmerProfiles[0];
+
+        res.json({
+            success: true,
+            profile: {
+                ...userData,
+                farmer_profile: {
+                    farmer_id: farmerData.farmer_id,
+                    nic: farmerData.nic,
+                    address: farmerData.address,
+                    gender: farmerData.gender,
+                    date_of_birth: farmerData.date_of_birth,
+                    created_at: farmerData.created_at,
+                    updated_at: farmerData.updated_at
+                }
+            }
+        });
+    } catch (error) {
+        console.error("Error fetching farmer profile:", error);
+        res.status(500).json({ 
+            success: false,
+            message: "Failed to fetch farmer profile", 
             error: error.message 
         });
     }

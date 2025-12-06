@@ -1,7 +1,7 @@
 
 import express from 'express';
 const router = express.Router();
-import { registerFarmer, loginFarmer, createFarm, createCultivation } from '../controllers/farmerController.js';
+import { registerFarmer, loginFarmer, createFarm, createCultivation, createHarvest, getFarmerProfile } from '../controllers/farmerController.js';
 import { protect } from '../middleware/auth.js';
 import { check } from 'express-validator';
 
@@ -21,6 +21,8 @@ router.post('/login', [
     check('password', 'Password is required').exists()
 ], loginFarmer);
 
+router.get('/profile', protect, getFarmerProfile);
+
 router.post('/farms', protect, [
     check('farm_name', 'Farm name is required').not().isEmpty(),
     check('gps_coordinates', 'GPS coordinates are required').not().isEmpty(),
@@ -29,12 +31,14 @@ router.post('/farms', protect, [
 ], createFarm);
 
 router.post('/cultivations', protect, [
+    check('batch_no', 'Batch number is required').not().isEmpty(),
+    check('batch_no', 'Batch number must be a valid string').isString(),
     check('farm_id', 'Farm ID is required').not().isEmpty(),
     check('farm_id', 'Farm ID must be a valid number').isInt({ min: 1 }),
     check('date_of_planting', 'Date of planting is required').not().isEmpty(),
     check('date_of_planting', 'Date of planting must be a valid date').isISO8601(),
     check('seeding_source', 'Seeding source is required').not().isEmpty(),
-    check('type_of_fertilizer', 'Type of fertilizer is required').not().isEmpty(),
+    check('type_of_fertilizers', 'Type of fertilizers is required').not().isEmpty(),
     check('pesticides', 'Pesticides information is required').not().isEmpty(),
     check('organic_certification', 'Organic certification is required').not().isEmpty(),
     check('expected_harvest_date', 'Expected harvest date is required').not().isEmpty(),
@@ -42,5 +46,15 @@ router.post('/cultivations', protect, [
     check('no_of_trees', 'Number of trees is required').not().isEmpty(),
     check('no_of_trees', 'Number of trees must be a valid integer').isInt({ min: 1 })
 ], createCultivation);
+
+router.post('/harvests', protect, [
+    check('batch_no', 'Batch number is required').not().isEmpty(),
+    check('batch_no', 'Batch number must be a valid string').isString(),
+    check('harvest_date', 'Harvest date is required').not().isEmpty(),
+    check('harvest_date', 'Harvest date must be a valid date').isISO8601(),
+    check('harvest_method', 'Harvest method is required').not().isEmpty(),
+    check('quantity', 'Quantity is required').not().isEmpty(),
+    check('quantity', 'Quantity must be a valid number').isFloat({ min: 0 })
+], createHarvest);
 
 export default router;
