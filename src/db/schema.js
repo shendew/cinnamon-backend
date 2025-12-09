@@ -50,6 +50,9 @@ export const main = pgTable('main', {
   harvested_quantity: numeric('harvested_quantity'),
   collect_id: integer('collect_id').references(() => collect_table.collect_id, { onDelete: 'cascade' }),
   is_collected: boolean('is_collected').default(false),
+  transport_id: integer('transport_id').references(() => transport.transport_id, { onDelete: 'cascade' }),
+  inTransporting: boolean('inTransporting').default(false),
+  isTransported: boolean('isTransported').default(false),
   created_at: timestamptz('created_at').defaultNow(),
   updated_at: timestamptz('updated_at').defaultNow()
 });
@@ -93,6 +96,19 @@ export const collector_profile = pgTable('collector_profile', {
   center_name: text('center_name').notNull(),
   vehicle_id: text('vehicle_id').notNull(),
   location: text('location').notNull(),
+  created_at: timestamptz('created_at').defaultNow(),
+  updated_at: timestamptz('updated_at').defaultNow()
+});
+
+
+export const transport = pgTable('transport', {
+  transport_id: serial('transport_id').primaryKey(),
+  batch_no: text('batch_no').references(() => main.batch_no, { onDelete: 'cascade' }),
+  collector_id: integer('collector_id').references(() => collector_profile.collector_id, { onDelete: 'cascade' }).notNull(),
+  transport_method: text('transport_method'),
+  transport_started_date: date('transport_started_date'),
+  transport_ended_date: date('transport_ended_date'),
+  storage_conditions: text('storage_conditions'),
   created_at: timestamptz('created_at').defaultNow(),
   updated_at: timestamptz('updated_at').defaultNow()
 });
