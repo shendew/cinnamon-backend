@@ -4,7 +4,7 @@ import { pgTable, serial, integer, numeric, text, date, boolean } from 'drizzle-
 export const role = pgTable('role', {
   role_id: serial('role_id').primaryKey(),
   role_name: text('role_name').notNull(),
-  created_at: timestamptz('created_at').defaultNow(),
+  created_at: timestamptz('created_at').defaultNow()
 });
 
 export const user = pgTable('user', {
@@ -53,6 +53,11 @@ export const main = pgTable('main', {
   transport_id: integer('transport_id').references(() => transport.transport_id, { onDelete: 'cascade' }),
   inTransporting: boolean('inTransporting').default(false),
   isTransported: boolean('isTransported').default(false),
+  processor_id: integer('processor_id').references(() => processor_profile.processor_id, { onDelete: 'cascade' }),
+  process_id: integer('process_id').references(() => process.process_id, { onDelete: 'cascade' }),
+  inProcess: boolean('inProcess').default(false),
+  dried_weight: numeric('dried_weight'),
+  isProcessed: boolean('isProcessed').default(false),
   created_at: timestamptz('created_at').defaultNow(),
   updated_at: timestamptz('updated_at').defaultNow()
 });
@@ -110,5 +115,36 @@ export const transport = pgTable('transport', {
   transport_ended_date: date('transport_ended_date'),
   storage_conditions: text('storage_conditions'),
   created_at: timestamptz('created_at').defaultNow(),
+  updated_at: timestamptz('updated_at').defaultNow()
+});
+
+export const processor_profile = pgTable('processor_profile', {
+  processor_id: serial('processor_id').primaryKey(),
+  user_id: integer('user_id').references(() => user.user_id, { onDelete: 'cascade' }).notNull(),
+  process_station_name: text('process_station_name').notNull(),
+  process_station_location: text('process_station_location').notNull(),
+  created_at: timestamptz('created_at').defaultNow(),
+  updated_at: timestamptz('updated_at').defaultNow()
+});
+
+export const process = pgTable('process', {
+  process_id: serial('process_id').primaryKey(),
+  batch_no: text('batch_no').references(() => main.batch_no, { onDelete: 'cascade' }),
+  processor_id: integer('processor_id').references(() => processor_profile.processor_id, { onDelete: 'cascade' }).notNull(),
+  isDried: boolean('isDried').default(false),
+  dry_started_date: date('dry_started_date'),
+  dry_ended_date: date('dry_ended_date'),
+  moisture_content: numeric('moisture_content'),
+  dried_weight: numeric('dried_weight'),
+  isGraded: boolean('isGraded').default(false),
+  graded_date: date('graded_date'),
+  grader_id: integer('grader_id'),
+  grader_sign: text('grader_sign'),
+  isPacked: boolean('isPacked').default(false),
+  packed_date: date('packed_date'),
+  packed_by: text('packed_by'),
+  packing_type: text('packing_type'),
+  package_weight: numeric('package_weight'),
+  processed_date: date('processed_date').defaultNow(),
   updated_at: timestamptz('updated_at').defaultNow()
 });
