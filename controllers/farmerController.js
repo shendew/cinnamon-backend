@@ -4,6 +4,7 @@ import { eq, and, sql } from 'drizzle-orm';
 import bcrypt from 'bcrypt';
 import { validationResult } from 'express-validator';
 import { generateToken } from '../utils/jwt.js';
+import { uploadToGoogleDrive } from '../utils/googleDrive.js';
 
 
 const sanitizeUser = (userInstance) => {
@@ -233,7 +234,15 @@ export const createCultivation = async (req, res) => {
         }
 
         const farmerId = farmerProfiles[0].farmer_id;
-        const { batch_no, farm_id, date_of_planting, seeding_source, type_of_fertilizers, pesticides, organic_certification, expected_harvest_date, no_of_trees } = req.body;
+        const { batch_no, farm_id, date_of_planting, seeding_source, type_of_fertilizers, pesticides, expected_harvest_date, no_of_trees } = req.body;
+
+        // Check if file was uploaded
+        if (!req.file) {
+            return res.status(400).json({ 
+                success: false,
+                message: 'Organic certification document is required' 
+            });
+        }
 
         // Verify that the farm belongs to this farmer
         const farmRecords = await db.select()
@@ -262,6 +271,20 @@ export const createCultivation = async (req, res) => {
             });
         }
 
+        // Upload file to Google Drive with unique filename using batch_no
+        let driveFileData = null;
+        try {
+            const customFileName = `organic-cert-${batch_no}`;
+            driveFileData = await uploadToGoogleDrive(req.file, 'Organic Certification', customFileName);
+        } catch (uploadError) {
+            console.error('Error uploading file to Google Drive:', uploadError);
+            return res.status(500).json({ 
+                success: false,
+                message: 'Failed to upload organic certification document to Google Drive',
+                error: uploadError.message
+            });
+        }
+
         // Create cultivation record in a transaction
         const result = await db.transaction(async (tx) => {
             // Step 1: Create main record first with batch_no, farm_id, farmer_id, is_harvested=false
@@ -280,7 +303,7 @@ export const createCultivation = async (req, res) => {
                 seeding_source,
                 type_of_fertilizers,
                 pesticides,
-                organic_certification,
+                organic_certification: driveFileData.webViewLink, // Store Google Drive link only
                 expected_harvest_date,
                 no_of_trees: no_of_trees
             }).returning();
@@ -300,7 +323,8 @@ export const createCultivation = async (req, res) => {
             success: true,
             message: 'Cultivation record created successfully',
             cultivation: result,
-            batch_no: batch_no
+            batch_no: batch_no,
+            organic_certification_link: driveFileData.webViewLink
         });
     } catch (error) {
         console.error("Error creating cultivation:", error);
