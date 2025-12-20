@@ -58,6 +58,12 @@ export const main = pgTable('main', {
   inProcess: boolean('inProcess').default(false),
   dried_weight: numeric('dried_weight'),
   isProcessed: boolean('isProcessed').default(false),
+  distribute_id: integer('distribute_id').references(() => distribute_table.distribute_id, { onDelete: 'cascade' }),
+  collected_by_distributor: boolean('collected_by_distributor').default(false),
+  is_distributed: boolean('is_distributed').default(false),
+  export_id: integer('export_id').references(() => export_table.export_id, { onDelete: 'cascade' }),
+  collected_by_exporter: boolean('collected_by_exporter').default(false),
+  is_exported: boolean('is_exported').default(false),
   created_at: timestamptz('created_at').defaultNow(),
   updated_at: timestamptz('updated_at').defaultNow()
 });
@@ -138,7 +144,7 @@ export const process = pgTable('process', {
   dried_weight: numeric('dried_weight'),
   isGraded: boolean('isGraded').default(false),
   graded_date: date('graded_date'),
-  grader_id: integer('grader_id'),
+  grader_id: integer('grader_id').references(() => grader_profile.grader_id, { onDelete: 'cascade' }),
   grader_sign: text('grader_sign'),
   isPacked: boolean('isPacked').default(false),
   packed_date: date('packed_date'),
@@ -148,3 +154,49 @@ export const process = pgTable('process', {
   processed_date: date('processed_date').defaultNow(),
   updated_at: timestamptz('updated_at').defaultNow()
 });
+
+export const grader_profile = pgTable('grader_profile', {
+  grader_id: serial('grader_id').primaryKey(),
+  grader_name: text('grader_name').notNull(),
+  grader_contact: text('grader_contact').notNull(),
+  created_at: timestamptz('created_at').defaultNow(),
+  updated_at: timestamptz('updated_at').defaultNow()
+});
+
+
+export const distributor_profile = pgTable('distributor_profile', {
+  distributor_id: serial('distributor_id').primaryKey(),
+  user_id: integer('user_id').references(() => user.user_id, { onDelete: 'cascade' }).notNull(),
+  created_at: timestamptz('created_at').defaultNow(),
+  updated_at: timestamptz('updated_at').defaultNow()
+});
+
+export const distribute_table = pgTable('distribute_table', {
+  distribute_id: serial('distribute_id').primaryKey(),
+  distributor_id: integer('distributor_id').references(() => distributor_profile.distributor_id, { onDelete: 'cascade' }).notNull(),
+  batch_no: text('batch_no').references(() => main.batch_no, { onDelete: 'cascade' }),
+  collected_date: date('collected_date'),
+  distributed_date: date('distributed_date'),
+  created_at: timestamptz('created_at').defaultNow(),
+  updated_at: timestamptz('updated_at').defaultNow()
+});
+
+export const exporter_profile = pgTable('exporter_profile', {
+  exporter_id: serial('exporter_id').primaryKey(),
+  user_id: integer('user_id').references(() => user.user_id, { onDelete: 'cascade' }).notNull(),
+  exporter_license: text('exporter_license').notNull(),
+  created_at: timestamptz('created_at').defaultNow(),
+  updated_at: timestamptz('updated_at').defaultNow()
+});
+
+export const export_table = pgTable('export_table', {
+  export_id: serial('export_id').primaryKey(),
+  batch_no: text('batch_no').references(() => main.batch_no, { onDelete: 'cascade' }),
+  exporter_id: integer('exporter_id').references(() => exporter_profile.exporter_id, { onDelete: 'cascade' }).notNull(),
+  collected_date: date('collected_date'),
+  exported_to: text('exported_to'),
+  exported_date: date('exported_date'),
+  created_at: timestamptz('created_at').defaultNow(),
+  updated_at: timestamptz('updated_at').defaultNow()
+});
+

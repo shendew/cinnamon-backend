@@ -271,10 +271,11 @@ export const createCultivation = async (req, res) => {
             });
         }
 
-        // Upload file to Google Drive
+        // Upload file to Google Drive with unique filename using batch_no
         let driveFileData = null;
         try {
-            driveFileData = await uploadToGoogleDrive(req.file, 'Organic Certification');
+            const customFileName = `organic-cert-${batch_no}`;
+            driveFileData = await uploadToGoogleDrive(req.file, 'Organic Certification', customFileName);
         } catch (uploadError) {
             console.error('Error uploading file to Google Drive:', uploadError);
             return res.status(500).json({ 

@@ -25,11 +25,12 @@ const oauth2Client = new google.auth.OAuth2(
 
 /**
  * Upload file to Google Drive
- * @param {Object} fileObject - File object with buffer, originalname, mimetype
+ * @param {Object} fileObject - File object with buffer, originalname, mimetype, path
  * @param {string} folderName - Folder name in Google Drive
+ * @param {string} customFileName - Optional custom filename (without extension). If not provided, uses originalname with timestamp
  * @returns {Promise<Object>} - File metadata with webViewLink and id
  */
-export const uploadToGoogleDrive = async (fileObject, folderName = 'Organic Certification') => {
+export const uploadToGoogleDrive = async (fileObject, folderName = 'Organic Certification', customFileName = null) => {
     try {
         // Note: You need to set refresh token in environment variable
         // or implement full OAuth flow for production
@@ -46,9 +47,23 @@ export const uploadToGoogleDrive = async (fileObject, folderName = 'Organic Cert
         // Check if folder exists, create if not
         let folderId = await findOrCreateFolder(drive, folderName);
 
+        // Generate unique filename
+        const fileExtension = path.extname(fileObject.originalname);
+        let fileName;
+        if (customFileName) {
+            // Use custom filename with timestamp to ensure uniqueness
+            const timestamp = Date.now();
+            fileName = `${customFileName}-${timestamp}${fileExtension}`;
+        } else {
+            // Use original name with timestamp to ensure uniqueness
+            const timestamp = Date.now();
+            const nameWithoutExt = path.basename(fileObject.originalname, fileExtension);
+            fileName = `${nameWithoutExt}-${timestamp}${fileExtension}`;
+        }
+
         // Upload file
         const fileMetadata = {
-            name: fileObject.originalname,
+            name: fileName,
             parents: [folderId]
         };
 
