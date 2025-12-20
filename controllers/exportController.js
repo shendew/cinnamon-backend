@@ -11,6 +11,7 @@ const sanitizeUser = (userInstance) => {
     return userWithoutPassword;
 };
 
+//test comment
 export const registerExporter = async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
