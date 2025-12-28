@@ -196,6 +196,51 @@ export const createFarm = async (req, res) => {
     }
 };
 
+export const getFarms = async (req, res) => {
+    try {
+        // Verify user is a farmer
+        const userRoleId = Number(req.user.role_id);
+        
+        if (isNaN(userRoleId) || userRoleId !== 1) {
+            return res.status(403).json({ 
+                success: false,
+                message: 'Only farmers can view farms'
+            });
+        }
+
+        // Get farmer_id from farmer_profile
+        const farmerProfiles = await db.select()
+            .from(farmer_profile)
+            .where(eq(farmer_profile.user_id, req.user.user_id));
+
+        if (farmerProfiles.length === 0) {
+            return res.status(404).json({ 
+                success: false,
+                message: 'Farmer profile not found' 
+            });
+        }
+
+        const farmerId = farmerProfiles[0].farmer_id;
+
+        // Get all farms for this farmer
+        const farmerFarms = await db.select()
+            .from(farms)
+            .where(eq(farms.farmer_id, farmerId));
+
+        res.json({
+            success: true,
+            farms: farmerFarms
+        });
+    } catch (error) {
+        console.error("Error fetching farms:", error);
+        res.status(500).json({ 
+            success: false,
+            message: "Failed to fetch farms", 
+            error: error.message 
+        });
+    }
+};
+
 export const createCultivation = async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -331,6 +376,163 @@ export const createCultivation = async (req, res) => {
         res.status(500).json({ 
             success: false,
             message: "Failed to create cultivation record", 
+            error: error.message 
+        });
+    }
+};
+
+export const getCultivations = async (req, res) => {
+    try {
+        // Verify user is a farmer
+        const userRoleId = Number(req.user.role_id);
+        
+        if (isNaN(userRoleId) || userRoleId !== 1) {
+            return res.status(403).json({ 
+                success: false,
+                message: 'Only farmers can view cultivations'
+            });
+        }
+
+        // Get farmer_id from farmer_profile
+        const farmerProfiles = await db.select()
+            .from(farmer_profile)
+            .where(eq(farmer_profile.user_id, req.user.user_id));
+
+        if (farmerProfiles.length === 0) {
+            return res.status(404).json({ 
+                success: false,
+                message: 'Farmer profile not found' 
+            });
+        }
+
+        const farmerId = farmerProfiles[0].farmer_id;
+
+        // Get all farms for this farmer first
+        const farmerFarms = await db.select()
+            .from(farms)
+            .where(eq(farms.farmer_id, farmerId));
+
+        const farmIds = farmerFarms.map(f => f.farm_id);
+
+        if (farmIds.length === 0) {
+            return res.json({
+                success: true,
+                cultivations: []
+            });
+        }
+
+        // Get all cultivations from main table where farm_id belongs to this farmer
+        const cultivationRecords = await db.select({
+            batch_no: main.batch_no,
+            farm_id: main.farm_id,
+            cultivation_id: cultivation.cultivation_id,
+            date_of_planting: cultivation.date_of_planting,
+            seeding_source: cultivation.seeding_source,
+            type_of_fertilizers: cultivation.type_of_fertilizers,
+            pesticides: cultivation.pesticides,
+            organic_certification: cultivation.organic_certification,
+            expected_harvest_date: cultivation.expected_harvest_date,
+            no_of_trees: cultivation.no_of_trees,
+            is_harvested: main.is_harvested,
+            harvested_quantity: main.harvested_quantity,
+            harvest_date: harvest.harvest_date,
+            created_at: cultivation.created_at,
+            farm_name: farms.farm_name
+        })
+        .from(main)
+        .innerJoin(cultivation, eq(main.batch_no, cultivation.batch_no))
+        .innerJoin(farms, eq(main.farm_id, farms.farm_id))
+        .leftJoin(harvest, eq(main.batch_no, harvest.batch_no))
+        .where(eq(main.farmer_id, farmerId));
+
+        res.json({
+            success: true,
+            cultivations: cultivationRecords
+        });
+    } catch (error) {
+        console.error("Error fetching cultivations:", error);
+        res.status(500).json({ 
+            success: false,
+            message: "Failed to fetch cultivations", 
+            error: error.message 
+        });
+    }
+};
+
+export const getCultivationByBatchNo = async (req, res) => {
+    try {
+        const { batch_no } = req.params;
+        
+        // Verify user is a farmer
+        const userRoleId = Number(req.user.role_id);
+        
+        if (isNaN(userRoleId) || userRoleId !== 1) {
+            return res.status(403).json({ 
+                success: false,
+                message: 'Only farmers can view cultivation details'
+            });
+        }
+
+        // Get farmer_id from farmer_profile
+        const farmerProfiles = await db.select()
+            .from(farmer_profile)
+            .where(eq(farmer_profile.user_id, req.user.user_id));
+
+        if (farmerProfiles.length === 0) {
+            return res.status(404).json({ 
+                success: false,
+                message: 'Farmer profile not found' 
+            });
+        }
+
+        const farmerId = farmerProfiles[0].farmer_id;
+
+        // Get cultivation details with farm info
+        const cultivationRecord = await db.select({
+            batch_no: main.batch_no,
+            farm_id: main.farm_id,
+            cultivation_id: cultivation.cultivation_id,
+            date_of_planting: cultivation.date_of_planting,
+            seeding_source: cultivation.seeding_source,
+            type_of_fertilizers: cultivation.type_of_fertilizers,
+            pesticides: cultivation.pesticides,
+            organic_certification: cultivation.organic_certification,
+            expected_harvest_date: cultivation.expected_harvest_date,
+            no_of_trees: cultivation.no_of_trees,
+            is_harvested: main.is_harvested,
+            harvested_quantity: main.harvested_quantity,
+            harvest_date: harvest.harvest_date,
+            harvest_method: harvest.harvest_method,
+            created_at: cultivation.created_at,
+            farm_name: farms.farm_name,
+            gps_coordinates: farms.gps_coordinates,
+            area_acres: farms.area_acres
+        })
+        .from(main)
+        .innerJoin(cultivation, eq(main.batch_no, cultivation.batch_no))
+        .innerJoin(farms, eq(main.farm_id, farms.farm_id))
+        .leftJoin(harvest, eq(main.batch_no, harvest.batch_no))
+        .where(and(
+            eq(main.batch_no, batch_no),
+            eq(main.farmer_id, farmerId)
+        ));
+
+        if (cultivationRecord.length === 0) {
+            return res.status(404).json({ 
+                success: false,
+                message: 'Cultivation not found or you do not have permission to view it' 
+            });
+        }
+
+        res.json({
+            success: true,
+            cultivation: cultivationRecord[0]
+        });
+    } catch (error) {
+        console.error("Error fetching cultivation details:", error);
+        res.status(500).json({ 
+            success: false,
+            message: "Failed to fetch cultivation details", 
             error: error.message 
         });
     }
