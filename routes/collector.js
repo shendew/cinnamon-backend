@@ -1,6 +1,6 @@
 import express from 'express';
 const router = express.Router();
-import { registerCollector, loginCollector, getCollectorProfile, collectBatch, startTransport, completeTransport } from '../controllers/collectorController.js';
+import { registerCollector, loginCollector, getCollectorProfile, collectBatch, startTransport, completeTransport, getAvailableBatches, getMyCollections, getTransportReadyBatches, getBatchDetails } from '../controllers/collectorController.js';
 import { protect } from '../middleware/auth.js';
 import { check } from 'express-validator';
 
@@ -20,6 +20,18 @@ router.post('/login', [
 ], loginCollector);
 
 router.get('/profile', protect, getCollectorProfile);
+
+// Get available batches for collection (harvested but not yet collected)
+router.get('/batches/available', protect, getAvailableBatches);
+
+// Get batches collected by this collector with transport status
+router.get('/collections', protect, getMyCollections);
+
+// Get batches ready for transport (collected but not yet transporting)
+router.get('/batches/transport-ready', protect, getTransportReadyBatches);
+
+// Get comprehensive batch details (timeline view)
+router.get('/batch/:batch_no', protect, getBatchDetails);
 
 router.post('/collect', protect, [
     check('batch_no', 'Batch number is required').not().isEmpty(),

@@ -1,5 +1,5 @@
 import { db } from '../config/db.js';
-import { user, collector_profile, main, collect_table, transport } from '../src/db/schema.js';
+import { user, collector_profile, main, collect_table, transport, farms, farmer_profile, harvest, cultivation } from '../src/db/schema.js';
 import { eq, and, sql } from 'drizzle-orm';
 import bcrypt from 'bcrypt';
 import { validationResult } from 'express-validator';
@@ -535,6 +535,365 @@ export const completeTransport = async (req, res) => {
         res.status(500).json({ 
             success: false,
             message: "Failed to complete transport", 
+            error: error.message 
+        });
+    }
+};
+
+export const getAvailableBatches = async (req, res) => {
+    try {
+        // Verify user is a collector
+        const userRoleId = Number(req.user.role_id);
+        
+        if (isNaN(userRoleId) || userRoleId !== 2) {
+            return res.status(403).json({ 
+                success: false,
+                message: 'Only collectors can access available batches' 
+            });
+        }
+
+        // Get batches that are harvested but not yet collected
+        // Join with farms and farmer_profile to get additional context
+        const availableBatches = await db
+            .select({
+                batch_no: main.batch_no,
+                farm_id: main.farm_id,
+                farmer_id: main.farmer_id,
+                harvested_quantity: main.harvested_quantity,
+                farm_name: farms.farm_name,
+                gps_coordinates: farms.gps_coordinates,
+                farmer_name: user.name,
+                farmer_phone: user.phone,
+                is_harvested: main.is_harvested,
+                created_at: main.created_at
+            })
+            .from(main)
+            .leftJoin(farms, eq(main.farm_id, farms.farm_id))
+            .leftJoin(farmer_profile, eq(main.farmer_id, farmer_profile.farmer_id))
+            .leftJoin(user, eq(farmer_profile.user_id, user.user_id))
+            .where(
+                and(
+                    eq(main.is_harvested, true),
+                    eq(main.is_collected, false)
+                )
+            )
+            .orderBy(main.created_at);
+
+        res.json({
+            success: true,
+            batches: availableBatches
+        });
+    } catch (error) {
+        console.error("Error fetching available batches:", error);
+        res.status(500).json({ 
+            success: false,
+            message: "Failed to fetch available batches", 
+            error: error.message 
+        });
+    }
+};
+
+export const getMyCollections = async (req, res) => {
+    try {
+        // Verify user is a collector
+        const userRoleId = Number(req.user.role_id);
+        
+        if (isNaN(userRoleId) || userRoleId !== 2) {
+            return res.status(403).json({ 
+                success: false,
+                message: 'Only collectors can access their collections' 
+            });
+        }
+
+        // Get collector_id from collector_profile using user_id
+        const collectorProfiles = await db.select()
+            .from(collector_profile)
+            .where(eq(collector_profile.user_id, req.user.user_id));
+
+        if (collectorProfiles.length === 0) {
+            return res.status(404).json({ 
+                success: false,
+                message: 'Collector profile not found' 
+            });
+        }
+
+        const collectorId = collectorProfiles[0].collector_id;
+
+        // Get all batches collected by this collector with transport status
+        const myCollections = await db
+            .select({
+                collect_id: collect_table.collect_id,
+                batch_no: collect_table.batch_no,
+                collected_date: collect_table.collected_date,
+                farm_id: main.farm_id,
+                farmer_id: main.farmer_id,
+                harvested_quantity: main.harvested_quantity,
+                is_collected: main.is_collected,
+                inTransporting: main.inTransporting,
+                isTransported: main.isTransported,
+                farm_name: farms.farm_name,
+                gps_coordinates: farms.gps_coordinates,
+                farmer_name: user.name,
+                farmer_phone: user.phone,
+                transport_id: transport.transport_id,
+                transport_method: transport.transport_method,
+                transport_started_date: transport.transport_started_date,
+                transport_ended_date: transport.transport_ended_date,
+                storage_conditions: transport.storage_conditions
+            })
+            .from(collect_table)
+            .innerJoin(main, eq(collect_table.batch_no, main.batch_no))
+            .leftJoin(farms, eq(main.farm_id, farms.farm_id))
+            .leftJoin(farmer_profile, eq(main.farmer_id, farmer_profile.farmer_id))
+            .leftJoin(user, eq(farmer_profile.user_id, user.user_id))
+            .leftJoin(transport, eq(main.transport_id, transport.transport_id))
+            .where(eq(collect_table.collector_id, collectorId))
+            .orderBy(sql`${collect_table.collected_date} DESC`);
+
+        // Transform data to include transport status
+        const collectionsWithStatus = myCollections.map(item => ({
+            ...item,
+            transport_status: item.isTransported 
+                ? 'completed' 
+                : item.inTransporting 
+                    ? 'in_progress' 
+                    : 'pending'
+        }));
+
+        res.json({
+            success: true,
+            collections: collectionsWithStatus
+        });
+    } catch (error) {
+        console.error("Error fetching collections:", error);
+        res.status(500).json({ 
+            success: false,
+            message: "Failed to fetch collections", 
+            error: error.message 
+        });
+    }
+};
+
+export const getTransportReadyBatches = async (req, res) => {
+    try {
+        // Verify user is a collector
+        const userRoleId = Number(req.user.role_id);
+        
+        if (isNaN(userRoleId) || userRoleId !== 2) {
+            return res.status(403).json({ 
+                success: false,
+                message: 'Only collectors can access transport-ready batches' 
+            });
+        }
+
+        // Get collector_id from collector_profile using user_id
+        const collectorProfiles = await db.select()
+            .from(collector_profile)
+            .where(eq(collector_profile.user_id, req.user.user_id));
+
+        if (collectorProfiles.length === 0) {
+            return res.status(404).json({ 
+                success: false,
+                message: 'Collector profile not found' 
+            });
+        }
+
+        const collectorId = collectorProfiles[0].collector_id;
+        const collectorVehicleId = collectorProfiles[0].vehicle_id;
+
+        // Get batches that are collected by this collector but not yet in transport or transported
+        const transportReadyBatches = await db
+            .select({
+                batch_no: collect_table.batch_no,
+                collected_date: collect_table.collected_date,
+                farm_id: main.farm_id,
+                farmer_id: main.farmer_id,
+                harvested_quantity: main.harvested_quantity,
+                farm_name: farms.farm_name,
+                farmer_name: user.name,
+                is_collected: main.is_collected,
+                inTransporting: main.inTransporting,
+                isTransported: main.isTransported
+            })
+            .from(collect_table)
+            .innerJoin(main, eq(collect_table.batch_no, main.batch_no))
+            .leftJoin(farms, eq(main.farm_id, farms.farm_id))
+            .leftJoin(farmer_profile, eq(main.farmer_id, farmer_profile.farmer_id))
+            .leftJoin(user, eq(farmer_profile.user_id, user.user_id))
+            .where(
+                and(
+                    eq(collect_table.collector_id, collectorId),
+                    eq(main.is_collected, true),
+                    eq(main.inTransporting, false),
+                    eq(main.isTransported, false)
+                )
+            )
+            .orderBy(sql`${collect_table.collected_date} DESC`);
+
+        res.json({
+            success: true,
+            batches: transportReadyBatches,
+            vehicle_id: collectorVehicleId
+        });
+    } catch (error) {
+        console.error("Error fetching transport-ready batches:", error);
+        res.status(500).json({ 
+            success: false,
+            message: "Failed to fetch transport-ready batches", 
+            error: error.message 
+        });
+    }
+};
+
+export const getBatchDetails = async (req, res) => {
+    try {
+        // Verify user is a collector
+        const userRoleId = Number(req.user.role_id);
+        
+        if (isNaN(userRoleId) || userRoleId !== 2) {
+            return res.status(403).json({ 
+                success: false,
+                message: 'Only collectors can access batch details' 
+            });
+        }
+
+        const { batch_no } = req.params;
+
+        if (!batch_no) {
+            return res.status(400).json({ 
+                success: false,
+                message: 'Batch number is required' 
+            });
+        }
+
+        // Get batch from main table with all related info
+        const batchRecords = await db.select()
+            .from(main)
+            .where(eq(main.batch_no, batch_no));
+
+        if (batchRecords.length === 0) {
+            return res.status(404).json({ 
+                success: false,
+                message: 'Batch not found' 
+            });
+        }
+
+        const batch = batchRecords[0];
+
+        // Get farm details
+        let farmData = null;
+        if (batch.farm_id) {
+            const farmRecords = await db.select()
+                .from(farms)
+                .where(eq(farms.farm_id, batch.farm_id));
+            if (farmRecords.length > 0) {
+                farmData = farmRecords[0];
+            }
+        }
+
+        // Get farmer details
+        let farmerData = null;
+        if (batch.farmer_id) {
+            const farmerRecords = await db.select({
+                farmer_id: farmer_profile.farmer_id,
+                nic: farmer_profile.nic,
+                address: farmer_profile.address,
+                name: user.name,
+                phone: user.phone,
+                email: user.email
+            })
+            .from(farmer_profile)
+            .leftJoin(user, eq(farmer_profile.user_id, user.user_id))
+            .where(eq(farmer_profile.farmer_id, batch.farmer_id));
+            if (farmerRecords.length > 0) {
+                farmerData = farmerRecords[0];
+            }
+        }
+
+        // Get harvest details
+        let harvestData = null;
+        if (batch.harvest_id) {
+            const harvestRecords = await db.select()
+                .from(harvest)
+                .where(eq(harvest.harvest_id, batch.harvest_id));
+            if (harvestRecords.length > 0) {
+                harvestData = harvestRecords[0];
+            }
+        }
+
+        // Get cultivation details
+        let cultivationData = null;
+        const cultivationRecords = await db.select()
+            .from(cultivation)
+            .where(eq(cultivation.batch_no, batch_no));
+        if (cultivationRecords.length > 0) {
+            cultivationData = cultivationRecords[0];
+        }
+
+        // Get collection details
+        let collectionData = null;
+        let collectorData = null;
+        if (batch.collect_id) {
+            const collectRecords = await db.select()
+                .from(collect_table)
+                .where(eq(collect_table.collect_id, batch.collect_id));
+            if (collectRecords.length > 0) {
+                collectionData = collectRecords[0];
+                
+                // Get collector info
+                const collectorRecords = await db.select({
+                    collector_id: collector_profile.collector_id,
+                    center_name: collector_profile.center_name,
+                    vehicle_id: collector_profile.vehicle_id,
+                    location: collector_profile.location,
+                    name: user.name,
+                    phone: user.phone
+                })
+                .from(collector_profile)
+                .leftJoin(user, eq(collector_profile.user_id, user.user_id))
+                .where(eq(collector_profile.collector_id, collectionData.collector_id));
+                if (collectorRecords.length > 0) {
+                    collectorData = collectorRecords[0];
+                }
+            }
+        }
+
+        // Get transport details
+        let transportData = null;
+        if (batch.transport_id) {
+            const transportRecords = await db.select()
+                .from(transport)
+                .where(eq(transport.transport_id, batch.transport_id));
+            if (transportRecords.length > 0) {
+                transportData = transportRecords[0];
+            }
+        }
+
+        res.json({
+            success: true,
+            batch: {
+                batch_no: batch.batch_no,
+                is_harvested: batch.is_harvested,
+                harvested_quantity: batch.harvested_quantity,
+                is_collected: batch.is_collected,
+                inTransporting: batch.inTransporting,
+                isTransported: batch.isTransported,
+                created_at: batch.created_at,
+                updated_at: batch.updated_at
+            },
+            farm: farmData,
+            farmer: farmerData,
+            cultivation: cultivationData,
+            harvest: harvestData,
+            collection: collectionData,
+            collector: collectorData,
+            transport: transportData
+        });
+    } catch (error) {
+        console.error("Error fetching batch details:", error);
+        res.status(500).json({ 
+            success: false,
+            message: "Failed to fetch batch details", 
             error: error.message 
         });
     }

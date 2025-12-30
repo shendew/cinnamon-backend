@@ -7,6 +7,9 @@ import {
     createGraderProfile,
     getGraders,
     getAvailableBatches,
+    getGradedBatches,
+    getMyProcessings,
+    getProcessingDetails,
     markAsInProcess,
     markAsDried,
     markAsGraded,
@@ -41,6 +44,9 @@ router.post('/graders', protect, [
 router.get('/graders', protect, getGraders);
 
 router.get('/batches/available', protect, getAvailableBatches);
+
+// Get batches that are graded but not yet packed (ready for packaging)
+router.get('/batches/graded', protect, getGradedBatches);
 
 router.post('/process/start', protect, [
     check('batch_no', 'Batch number is required').not().isEmpty(),
@@ -82,5 +88,11 @@ router.post('/process/complete', protect, [
     check('batch_no', 'Batch number is required').not().isEmpty(),
     check('batch_no', 'Batch number must be a valid string').isString()
 ], markAsProcessed);
+
+// Get all processings by this processor with status
+router.get('/processings', protect, getMyProcessings);
+
+// Get full processing details (chain view)
+router.get('/processings/:batch_no', protect, getProcessingDetails);
 
 export default router;
