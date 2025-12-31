@@ -741,23 +741,37 @@ export const markAsPacked = async (req, res) => {
             });
         }
 
-        // Update process table
-        const result = await db.update(process)
-            .set({ 
-                isPacked: true,
-                packed_date: packed_date,
-                packed_by: packed_by,
-                packing_type: packing_type,
-                package_weight: parseFloat(package_weight),
-                updated_at: sql`NOW()`
-            })
-            .where(eq(process.process_id, batch.process_id))
-            .returning();
+        // Update process table AND mark as processed in main table (packaged = fully processed)
+        const result = await db.transaction(async (tx) => {
+            // Step 1: Update process table with packing info
+            const updatedProcess = await tx.update(process)
+                .set({ 
+                    isPacked: true,
+                    packed_date: packed_date,
+                    packed_by: packed_by,
+                    packing_type: packing_type,
+                    package_weight: parseFloat(package_weight),
+                    processed_date: packed_date, // Set processed date same as packed date
+                    updated_at: sql`NOW()`
+                })
+                .where(eq(process.process_id, batch.process_id))
+                .returning();
+
+            // Step 2: Update main table to mark as fully processed
+            await tx.update(main)
+                .set({ 
+                    isProcessed: true,
+                    updated_at: sql`NOW()`
+                })
+                .where(eq(main.batch_no, batch_no));
+
+            return updatedProcess[0];
+        });
 
         res.json({
             success: true,
-            message: 'Batch marked as packed successfully',
-            process: result[0],
+            message: 'Batch packed and marked as processed successfully! Ready for distribution.',
+            process: result,
             batch_no: batch_no
         });
     } catch (error) {
