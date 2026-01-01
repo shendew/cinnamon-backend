@@ -265,7 +265,7 @@ export const getGraders = async (req, res) => {
     }
 };
 
-// Get available transported batches
+// Get available transported batches (that this processor has received)
 export const getAvailableBatches = async (req, res) => {
     try {
         // Verify user is a processor
@@ -278,11 +278,26 @@ export const getAvailableBatches = async (req, res) => {
             });
         }
 
-        // Get batches that are transported but not yet in process
+        // Get processor_id from processor_profile using user_id
+        const processorProfiles = await db.select()
+            .from(processor_profile)
+            .where(eq(processor_profile.user_id, req.user.user_id));
+
+        if (processorProfiles.length === 0) {
+            return res.status(404).json({ 
+                success: false,
+                message: 'Processor profile not found' 
+            });
+        }
+
+        const processorId = processorProfiles[0].processor_id;
+
+        // Get batches that are transported, received by this processor, but not yet in process
         const availableBatches = await db.select()
             .from(main)
             .where(and(
                 eq(main.isTransported, true),
+                eq(main.processor_id, processorId),
                 eq(main.inProcess, false)
             ));
 
@@ -299,6 +314,168 @@ export const getAvailableBatches = async (req, res) => {
         });
     }
 };
+
+// Get batches currently being delivered (transported but not yet received by any processor)
+export const getDeliveringBatches = async (req, res) => {
+    try {
+        // Verify user is a processor
+        const userRoleId = Number(req.user.role_id);
+        
+        if (isNaN(userRoleId) || userRoleId !== 3) {
+            return res.status(403).json({ 
+                success: false,
+                message: 'Only processors can view delivering batches' 
+            });
+        }
+
+        // Get batches that are currently in transit but not yet assigned to any processor
+        const deliveringBatches = await db
+            .select({
+                batch_no: main.batch_no,
+                farm_id: main.farm_id,
+                farmer_id: main.farmer_id,
+                harvested_quantity: main.harvested_quantity,
+                inTransporting: main.inTransporting,
+                created_at: main.created_at,
+                farm_name: farms.farm_name,
+                farmer_name: user.name,
+                transport_method: transport.transport_method,
+                transport_started_date: transport.transport_started_date,
+                collector_name: sql`collector_user.name`.as('collector_name'),
+                collector_center: collector_profile.center_name
+            })
+            .from(main)
+            .leftJoin(farms, eq(main.farm_id, farms.farm_id))
+            .leftJoin(farmer_profile, eq(main.farmer_id, farmer_profile.farmer_id))
+            .leftJoin(user, eq(farmer_profile.user_id, user.user_id))
+            .leftJoin(transport, eq(main.transport_id, transport.transport_id))
+            .leftJoin(collector_profile, eq(transport.collector_id, collector_profile.collector_id))
+            .leftJoin(sql`"user" AS collector_user`, sql`${collector_profile.user_id} = collector_user.user_id`)
+            .where(and(
+                eq(main.inTransporting, true),
+                sql`${main.processor_id} IS NULL`
+            ))
+            .orderBy(sql`${main.updated_at} DESC`);
+
+        res.json({
+            success: true,
+            batches: deliveringBatches
+        });
+    } catch (error) {
+        console.error("Error fetching delivering batches:", error);
+        res.status(500).json({ 
+            success: false,
+            message: "Failed to fetch delivering batches", 
+            error: error.message 
+        });
+    }
+};
+
+// Receive a batch (assign processor_id to batch)
+export const receiveBatch = async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(400).json({ 
+            success: false,
+            errors: errors.array() 
+        });
+    }
+
+    try {
+        // Verify user is a processor
+        const userRoleId = Number(req.user.role_id);
+        
+        if (isNaN(userRoleId) || userRoleId !== 3) {
+            return res.status(403).json({ 
+                success: false,
+                message: 'Only processors can receive batches' 
+            });
+        }
+
+        // Get processor_id from processor_profile using user_id
+        const processorProfiles = await db.select()
+            .from(processor_profile)
+            .where(eq(processor_profile.user_id, req.user.user_id));
+
+        if (processorProfiles.length === 0) {
+            return res.status(404).json({ 
+                success: false,
+                message: 'Processor profile not found' 
+            });
+        }
+
+        const processorId = processorProfiles[0].processor_id;
+        const { batch_no } = req.body;
+
+        // Verify that the batch exists and is transported
+        const batchRecords = await db.select()
+            .from(main)
+            .where(eq(main.batch_no, batch_no));
+
+        if (batchRecords.length === 0) {
+            return res.status(404).json({ 
+                success: false,
+                message: 'Batch not found' 
+            });
+        }
+
+        const batch = batchRecords[0];
+
+        // Check if batch is in transit
+        if (!batch.inTransporting) {
+            return res.status(400).json({ 
+                success: false,
+                message: 'Batch must be in transit before receiving' 
+            });
+        }
+
+        // Check if batch is already received by another processor
+        if (batch.processor_id) {
+            return res.status(400).json({ 
+                success: false,
+                message: 'This batch has already been received by a processor' 
+            });
+        }
+
+        // Receive batch, complete transport, and start processing in a transaction
+        const result = await db.transaction(async (tx) => {
+            // Step 1: Create process record
+            const newProcess = await tx.insert(process).values({
+                batch_no: batch_no,
+                processor_id: processorId
+            }).returning();
+
+            // Step 2: Update main table with processor_id, complete transport, and start processing
+            await tx.update(main)
+                .set({ 
+                    processor_id: processorId,
+                    inTransporting: false,
+                    isTransported: true,
+                    inProcess: true,
+                    process_id: newProcess[0].process_id,
+                    updated_at: sql`NOW()`
+                })
+                .where(eq(main.batch_no, batch_no));
+
+            return newProcess[0];
+        });
+
+        res.json({
+            success: true,
+            message: 'Batch received and processing started successfully',
+            batch_no: batch_no,
+            process_id: result.process_id
+        });
+    } catch (error) {
+        console.error("Error receiving batch:", error);
+        res.status(500).json({ 
+            success: false,
+            message: "Failed to receive batch", 
+            error: error.message 
+        });
+    }
+};
+
 
 // Mark as in process
 export const markAsInProcess = async (req, res) => {
@@ -403,7 +580,104 @@ export const markAsInProcess = async (req, res) => {
     }
 };
 
-// Mark as dried
+// Start drying (first step of drying process)
+export const startDrying = async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(400).json({ 
+            success: false,
+            errors: errors.array() 
+        });
+    }
+
+    try {
+        // Verify user is a processor
+        const userRoleId = Number(req.user.role_id);
+        
+        if (isNaN(userRoleId) || userRoleId !== 3) {
+            return res.status(403).json({ 
+                success: false,
+                message: 'Only processors can start drying' 
+            });
+        }
+
+        const { batch_no, dry_started_date } = req.body;
+
+        // Verify that the batch exists and is in process
+        const batchRecords = await db.select()
+            .from(main)
+            .where(eq(main.batch_no, batch_no));
+
+        if (batchRecords.length === 0) {
+            return res.status(404).json({ 
+                success: false,
+                message: 'Batch not found' 
+            });
+        }
+
+        const batch = batchRecords[0];
+
+        // Check if batch is in process
+        if (!batch.inProcess) {
+            return res.status(400).json({ 
+                success: false,
+                message: 'Batch must be in process before starting drying' 
+            });
+        }
+
+        // Check if batch has a process record
+        if (!batch.process_id) {
+            return res.status(400).json({ 
+                success: false,
+                message: 'Process record not found for this batch' 
+            });
+        }
+
+        // Check if drying already started
+        const processRecords = await db.select()
+            .from(process)
+            .where(eq(process.process_id, batch.process_id));
+
+        if (processRecords.length === 0) {
+            return res.status(404).json({ 
+                success: false,
+                message: 'Process record not found' 
+            });
+        }
+
+        if (processRecords[0].dry_started_date) {
+            return res.status(400).json({ 
+                success: false,
+                message: 'Drying has already been started for this batch' 
+            });
+        }
+
+        // Update process table with dry_started_date
+        const updatedProcess = await db.update(process)
+            .set({ 
+                dry_started_date: dry_started_date,
+                updated_at: sql`NOW()`
+            })
+            .where(eq(process.process_id, batch.process_id))
+            .returning();
+
+        res.json({
+            success: true,
+            message: 'Drying started successfully',
+            process: updatedProcess[0],
+            batch_no: batch_no
+        });
+    } catch (error) {
+        console.error("Error starting drying:", error);
+        res.status(500).json({ 
+            success: false,
+            message: "Failed to start drying", 
+            error: error.message 
+        });
+    }
+};
+
+// Mark as dried (complete drying)
 export const markAsDried = async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -992,13 +1266,14 @@ export const getMyProcessings = async (req, res) => {
 
         const processorId = processorProfiles[0].processor_id;
 
-        // Get all batches in process by this processor
+        // Get all batches assigned to this processor (including received but not yet processing)
         const processings = await db.select({
             batch_no: main.batch_no,
             harvested_quantity: main.harvested_quantity,
             dried_weight: main.dried_weight,
             inProcess: main.inProcess,
             isProcessed: main.isProcessed,
+            isTransported: main.isTransported,
             farm_id: main.farm_id,
             created_at: main.created_at,
             process_id: process.process_id,
@@ -1012,8 +1287,9 @@ export const getMyProcessings = async (req, res) => {
             processed_date: process.processed_date
         })
         .from(main)
-        .innerJoin(process, eq(main.process_id, process.process_id))
-        .where(eq(main.processor_id, processorId));
+        .leftJoin(process, eq(main.process_id, process.process_id))
+        .where(eq(main.processor_id, processorId))
+        .orderBy(sql`${main.updated_at} DESC`);
 
         res.json({
             success: true,
