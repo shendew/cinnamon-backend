@@ -1,5 +1,5 @@
 import { db } from '../config/db.js';
-import { user, collector_profile, main, collect_table, transport, farms, farmer_profile, harvest, cultivation } from '../src/db/schema.js';
+import { user, collector_profile, main, collect_table, transport, farms, farmer_profile, harvest, cultivation, processor_profile } from '../src/db/schema.js';
 import { eq, and, sql } from 'drizzle-orm';
 import bcrypt from 'bcrypt';
 import { validationResult } from 'express-validator';
@@ -619,7 +619,7 @@ export const getMyCollections = async (req, res) => {
 
         const collectorId = collectorProfiles[0].collector_id;
 
-        // Get all batches collected by this collector with transport status
+        // Get all batches collected by this collector with transport status and processor info
         const myCollections = await db
             .select({
                 collect_id: collect_table.collect_id,
@@ -631,6 +631,7 @@ export const getMyCollections = async (req, res) => {
                 is_collected: main.is_collected,
                 inTransporting: main.inTransporting,
                 isTransported: main.isTransported,
+                processor_id: main.processor_id,
                 farm_name: farms.farm_name,
                 gps_coordinates: farms.gps_coordinates,
                 farmer_name: user.name,
@@ -639,7 +640,8 @@ export const getMyCollections = async (req, res) => {
                 transport_method: transport.transport_method,
                 transport_started_date: transport.transport_started_date,
                 transport_ended_date: transport.transport_ended_date,
-                storage_conditions: transport.storage_conditions
+                storage_conditions: transport.storage_conditions,
+                processor_name: sql`processor_user.name`.as('processor_name')
             })
             .from(collect_table)
             .innerJoin(main, eq(collect_table.batch_no, main.batch_no))
@@ -647,6 +649,8 @@ export const getMyCollections = async (req, res) => {
             .leftJoin(farmer_profile, eq(main.farmer_id, farmer_profile.farmer_id))
             .leftJoin(user, eq(farmer_profile.user_id, user.user_id))
             .leftJoin(transport, eq(main.transport_id, transport.transport_id))
+            .leftJoin(processor_profile, eq(main.processor_id, processor_profile.processor_id))
+            .leftJoin(sql`"user" AS processor_user`, sql`${processor_profile.user_id} = processor_user.user_id`)
             .where(eq(collect_table.collector_id, collectorId))
             .orderBy(sql`${collect_table.collected_date} DESC`);
 
