@@ -1,5 +1,5 @@
 import { timestamptz } from 'drizzle-orm/gel-core';
-import { pgTable, serial, integer, numeric, text, date, boolean } from 'drizzle-orm/pg-core';
+import { pgTable, serial, integer, numeric, text, date, boolean, jsonb, varchar, index } from 'drizzle-orm/pg-core';
 
 export const role = pgTable('role', {
   role_id: serial('role_id').primaryKey(),
@@ -111,7 +111,6 @@ export const collector_profile = pgTable('collector_profile', {
   updated_at: timestamptz('updated_at').defaultNow()
 });
 
-
 export const transport = pgTable('transport', {
   transport_id: serial('transport_id').primaryKey(),
   batch_no: text('batch_no').references(() => main.batch_no, { onDelete: 'cascade' }),
@@ -199,4 +198,130 @@ export const export_table = pgTable('export_table', {
   created_at: timestamptz('created_at').defaultNow(),
   updated_at: timestamptz('updated_at').defaultNow()
 });
+// Blockchain tables (Production-Ready)
 
+export const blockchain_blocks = pgTable('blockchain_blocks', {
+  block_id: serial('block_id').primaryKey(),
+  block_number: integer('block_number').notNull().unique(),
+  previous_hash: varchar('previous_hash', { length: 64 }).notNull(),
+  merkle_root: varchar('merkle_root', { length: 64 }).notNull(),
+  timestamp: timestamptz('timestamp').notNull().defaultNow(),
+  nonce: integer('nonce').notNull().default(0),
+  difficulty: integer('difficulty').notNull().default(2),
+  block_hash: varchar('block_hash', { length: 64 }).notNull().unique(),
+  validator_user_id: integer('validator_user_id').references(() => user.user_id),
+  validator_public_key: text('validator_public_key'),
+  validator_signature: text('validator_signature'),
+  transaction_count: integer('transaction_count').notNull().default(0),
+  mining_time_ms: integer('mining_time_ms'),
+  is_valid: boolean('is_valid').notNull().default(true),
+  created_at: timestamptz('created_at').defaultNow()
+}, (table) => {
+  return {
+    blockNumberIdx: index('block_number_idx').on(table.block_number),
+    blockHashIdx: index('block_hash_idx').on(table.block_hash),
+    validatorIdx: index('idx_blocks_validator').on(table.validator_user_id),
+    difficultyIdx: index('idx_blocks_difficulty').on(table.difficulty),
+    timestampIdx: index('idx_blocks_timestamp').on(table.timestamp),
+    isValidIdx: index('idx_blocks_is_valid').on(table.is_valid)
+  };
+});
+
+export const blockchain_transactions = pgTable('blockchain_transactions', {
+  transaction_id: serial('transaction_id').primaryKey(),
+  transaction_hash: varchar('transaction_hash', { length: 64 }).notNull().unique(),
+  block_id: integer('block_id').references(() => blockchain_blocks.block_id, { onDelete: 'restrict' }).notNull(),
+  transaction_type: text('transaction_type').notNull(),
+  batch_no: text('batch_no').notNull(),
+  actor_user_id: integer('actor_user_id').references(() => user.user_id).notNull(),
+  actor_role: text('actor_role').notNull(),
+  actor_public_key: text('actor_public_key'),
+  actor_signature: text('actor_signature').notNull(),
+  transaction_data: jsonb('transaction_data').notNull(),
+  from_entity_id: integer('from_entity_id'),
+  to_entity_id: integer('to_entity_id'),
+  document_hashes: jsonb('document_hashes'),
+  nonce: text('nonce'),
+  timestamp: timestamptz('timestamp').notNull().defaultNow(),
+  is_verified: boolean('is_verified').notNull().default(true),
+  verification_count: integer('verification_count').notNull().default(1),
+  created_at: timestamptz('created_at').defaultNow()
+}, (table) => {
+  return {
+    txHashIdx: index('tx_hash_idx').on(table.transaction_hash),
+    batchNoIdx: index('tx_batch_no_idx').on(table.batch_no),
+    blockIdIdx: index('tx_block_id_idx').on(table.block_id),
+    actorUserIdx: index('idx_tx_actor_user').on(table.actor_user_id),
+    batchTimestampIdx: index('idx_tx_batch_timestamp').on(table.batch_no, table.timestamp),
+    typeIdx: index('idx_tx_type').on(table.transaction_type),
+    nonceIdx: index('idx_tx_nonce').on(table.nonce)
+  };
+});
+
+export const blockchain_metadata = pgTable('blockchain_metadata', {
+  metadata_id: serial('metadata_id').primaryKey(),
+  key: text('key').notNull().unique(),
+  value: text('value').notNull(),
+  description: text('description'),
+  updated_at: timestamptz('updated_at').defaultNow()
+});
+
+export const batch_blockchain_refs = pgTable('batch_blockchain_refs', {
+  ref_id: serial('ref_id').primaryKey(),
+  batch_no: text('batch_no').references(() => main.batch_no, { onDelete: 'cascade' }).notNull(),
+  stage: text('stage').notNull(),
+  transaction_id: integer('transaction_id').references(() => blockchain_transactions.transaction_id, { onDelete: 'restrict' }).notNull(),
+  block_id: integer('block_id').references(() => blockchain_blocks.block_id, { onDelete: 'restrict' }).notNull(),
+  transaction_hash: varchar('transaction_hash', { length: 64 }).notNull(),
+  created_at: timestamptz('created_at').defaultNow()
+}, (table) => {
+  return {
+    batchStageIdx: index('batch_stage_idx').on(table.batch_no, table.stage)
+  };
+});
+
+// User cryptographic keys table
+export const user_keys = pgTable('user_keys', {
+  key_id: serial('key_id').primaryKey(),
+  user_id: integer('user_id').references(() => user.user_id, { onDelete: 'cascade' }).notNull(),
+  public_key: text('public_key').notNull(),
+  encrypted_private_key: text('encrypted_private_key').notNull(),
+  key_version: integer('key_version').notNull().default(1),
+  is_active: boolean('is_active').notNull().default(true),
+  created_at: timestamptz('created_at').defaultNow(),
+  updated_at: timestamptz('updated_at').defaultNow()
+}, (table) => {
+  return {
+    userIdx: index('idx_user_keys_user').on(table.user_id),
+    activeIdx: index('idx_user_keys_active').on(table.is_active)
+  };
+});
+
+// Blockchain health monitoring
+export const blockchain_health_logs = pgTable('blockchain_health_logs', {
+  log_id: serial('log_id').primaryKey(),
+  check_timestamp: timestamptz('check_timestamp').defaultNow(),
+  check_duration_ms: integer('check_duration_ms'),
+  check_passed: boolean('check_passed').notNull(),
+  total_blocks: integer('total_blocks'),
+  total_transactions: integer('total_transactions'),
+  issues_found: text('issues_found').array(),
+  error_message: text('error_message'),
+  chain_valid: boolean('chain_valid')
+}, (table) => {
+  return {
+    timestampIdx: index('idx_health_timestamp').on(table.check_timestamp)
+  };
+});
+// Blockchain metrics
+export const blockchain_metrics = pgTable('blockchain_metrics', {
+  metric_id: serial('metric_id').primaryKey(),
+  metric_timestamp: timestamptz('metric_timestamp').defaultNow(),
+  metric_type: varchar('metric_type', { length: 50 }).notNull(),
+  metric_value: numeric('metric_value'),
+  metadata: jsonb('metadata')
+}, (table) => {
+  return {
+    typeTimestampIdx: index('idx_metrics_type_time').on(table.metric_type, table.metric_timestamp)
+  };
+});

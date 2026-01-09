@@ -4,6 +4,7 @@ import { eq, and, sql } from 'drizzle-orm';
 import bcrypt from 'bcrypt';
 import { validationResult } from 'express-validator';
 import { generateToken } from '../utils/jwt.js';
+import { BlockchainHelper } from '../blockchain/BlockchainHelper.js';
 
 const sanitizeUser = (userInstance) => {
     const { password_hash, ...userWithoutPassword } = userInstance;
@@ -257,16 +258,15 @@ export const collectBatch = async (req, res) => {
             });
         }
 
-        // Create collection record in a transaction
         const result = await db.transaction(async (tx) => {
-            // Step 1: Create collect_table record
+            // create collect_table record
             const newCollection = await tx.insert(collect_table).values({
                 batch_no: batch_no,
                 collector_id: collectorId,
                 collected_date: collected_date
             }).returning();
 
-            // Step 2: Update main table with collect_id and is_collected=true
+            // update main table
             await tx.update(main)
                 .set({ 
                     collect_id: newCollection[0].collect_id,
@@ -278,11 +278,24 @@ export const collectBatch = async (req, res) => {
             return newCollection[0];
         });
 
+        // create collection on blockchain
+        const blockchainResult = await BlockchainHelper.recordCollection(
+            {
+                collected_date: collected_date,
+                collect_id: result.collect_id
+            },
+            batch_no,
+            req.user.user_id,
+            collectorId,
+            batch.farmer_id
+        );
+
         res.status(201).json({
             success: true,
             message: 'Batch collected successfully',
             collection: result,
-            batch_no: batch_no
+            batch_no: batch_no,
+            blockchain: blockchainResult
         });
     } catch (error) {
         console.error("Error collecting batch:", error);
@@ -375,9 +388,8 @@ export const startTransport = async (req, res) => {
             });
         }
 
-        // Create transport record in a transaction
         const result = await db.transaction(async (tx) => {
-            // Step 1: Create transport record
+            // create transport record
             const newTransport = await tx.insert(transport).values({
                 batch_no: batch_no,
                 collector_id: collectorId,
@@ -386,7 +398,7 @@ export const startTransport = async (req, res) => {
                 storage_conditions: storage_conditions
             }).returning();
 
-            // Step 2: Update main table with transport_id and inTransporting=true
+            // update main table
             await tx.update(main)
                 .set({ 
                     transport_id: newTransport[0].transport_id,
@@ -398,11 +410,25 @@ export const startTransport = async (req, res) => {
             return newTransport[0];
         });
 
+        // create transport start on blockchain
+        const blockchainResult = await BlockchainHelper.recordTransportStart(
+            {
+                transport_method: transport_method,
+                transport_started_date: transport_started_date,
+                storage_conditions: storage_conditions,
+                transport_id: result.transport_id
+            },
+            batch_no,
+            req.user.user_id,
+            collectorId
+        );
+
         res.status(201).json({
             success: true,
             message: 'Transport started successfully',
             transport: result,
-            batch_no: batch_no
+            batch_no: batch_no,
+            blockchain: blockchainResult
         });
     } catch (error) {
         console.error("Error starting transport:", error);
@@ -501,9 +527,8 @@ export const completeTransport = async (req, res) => {
             });
         }
 
-        // Complete transport in a transaction
         const result = await db.transaction(async (tx) => {
-            // Step 1: Update transport record with transport_ended_date
+            // update transport record with ended date
             const updatedTransport = await tx.update(transport)
                 .set({ 
                     transport_ended_date: transport_ended_date,
@@ -512,7 +537,7 @@ export const completeTransport = async (req, res) => {
                 .where(eq(transport.transport_id, batch.transport_id))
                 .returning();
 
-            // Step 2: Update main table with isTransported=true and inTransporting=false
+            // update main table
             await tx.update(main)
                 .set({ 
                     isTransported: true,
@@ -524,11 +549,23 @@ export const completeTransport = async (req, res) => {
             return updatedTransport[0];
         });
 
+        // write transport completion on blockchain
+        const blockchainResult = await BlockchainHelper.recordTransportEnd(
+            {
+                transport_ended_date: transport_ended_date,
+                transport_id: batch.transport_id
+            },
+            batch_no,
+            req.user.user_id,
+            collectorId
+        );
+
         res.json({
             success: true,
             message: 'Transport completed successfully',
             transport: result,
-            batch_no: batch_no
+            batch_no: batch_no,
+            blockchain: blockchainResult
         });
     } catch (error) {
         console.error("Error completing transport:", error);

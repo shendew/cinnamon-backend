@@ -4,6 +4,7 @@ import { eq, and, sql } from 'drizzle-orm';
 import bcrypt from 'bcrypt';
 import { validationResult } from 'express-validator';
 import { generateToken } from '../utils/jwt.js';
+import { BlockchainHelper } from '../blockchain/BlockchainHelper.js';
 
 const sanitizeUser = (userInstance) => {
     const { password_hash, ...userWithoutPassword } = userInstance;
@@ -287,16 +288,15 @@ export const markAsCollectedByDistributor = async (req, res) => {
             });
         }
 
-        // Create distribute record in a transaction
         const result = await db.transaction(async (tx) => {
-            // Step 1: Create distribute_table record
+            // create distribute_table record
             const newDistribute = await tx.insert(distribute_table).values({
                 batch_no: batch_no,
                 distributor_id: distributorId,
                 collected_date: collected_date
             }).returning();
 
-            // Step 2: Update main table with collected_by_distributor=true and distribute_id
+            // update main table
             await tx.update(main)
                 .set({ 
                     collected_by_distributor: true,
@@ -308,11 +308,24 @@ export const markAsCollectedByDistributor = async (req, res) => {
             return newDistribute[0];
         });
 
+        // create distribution collection on blockchain
+        const blockchainResult = await BlockchainHelper.recordDistributionCollect(
+            {
+                collected_date: collected_date,
+                distribute_id: result.distribute_id
+            },
+            batch_no,
+            req.user.user_id,
+            distributorId,
+            batch.processor_id
+        );
+
         res.status(201).json({
             success: true,
             message: 'Batch marked as collected by distributor successfully',
             distribution: result,
-            batch_no: batch_no
+            batch_no: batch_no,
+            blockchain: blockchainResult
         });
     } catch (error) {
         console.error("Error marking batch as collected by distributor:", error);
@@ -412,9 +425,8 @@ export const markAsDistributed = async (req, res) => {
             });
         }
 
-        // Update distribute and main tables in a transaction
         const result = await db.transaction(async (tx) => {
-            // Step 1: Update distribute_table with distributed_date
+            // update distribute_table with the date
             const updatedDistribute = await tx.update(distribute_table)
                 .set({ 
                     distributed_date: distributed_date,
@@ -423,7 +435,7 @@ export const markAsDistributed = async (req, res) => {
                 .where(eq(distribute_table.distribute_id, batch.distribute_id))
                 .returning();
 
-            // Step 2: Update main table with is_distributed=true
+            // update main table
             await tx.update(main)
                 .set({ 
                     is_distributed: true,
@@ -434,11 +446,23 @@ export const markAsDistributed = async (req, res) => {
             return updatedDistribute[0];
         });
 
+        // create distribution completion on blockchain
+        const blockchainResult = await BlockchainHelper.recordDistributionComplete(
+            {
+                distributed_date: distributed_date,
+                distribute_id: batch.distribute_id
+            },
+            batch_no,
+            req.user.user_id,
+            distributorId
+        );
+
         res.json({
             success: true,
             message: 'Batch marked as distributed successfully',
             distribution: result,
-            batch_no: batch_no
+            batch_no: batch_no,
+            blockchain: blockchainResult
         });
     } catch (error) {
         console.error("Error marking batch as distributed:", error);

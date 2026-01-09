@@ -6,6 +6,8 @@ import collectorRoutes from "./routes/collector.js";
 import processorRoutes from "./routes/processor.js";
 import distributorRoutes from "./routes/distributor.js";
 import exporterRoutes from "./routes/exporter.js";
+import blockchainRouter from "./routes/blockchain.js";
+import { blockchainService } from "./blockchain/BlockchainService.js";
 
 const app = express();
 app.use(express.json());
@@ -16,9 +18,22 @@ app.use("/api/collector", collectorRoutes);
 app.use("/api/processor", processorRoutes);
 app.use("/api/distributor", distributorRoutes);
 app.use("/api/exporter", exporterRoutes);
+app.use("/api/blockchain", blockchainRouter);
 
 const port = process.env.PORT || 3000;
 
-app.listen(port, () => {
-  console.log(`Server is running on port ${port}`);
-});
+async function startServer() {
+  try {
+    // initialize blockchain service
+    await blockchainService.initialize();
+    app.listen(port, () => {
+      console.log(`[SR] Server is running on port ${port}`);
+    });
+  } catch (error) {
+    app.listen(port, () => {
+      console.log(`[SR] Server is running on port ${port} BC failed ${error.message}`);
+    });
+  }
+}
+
+startServer();
