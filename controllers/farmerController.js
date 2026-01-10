@@ -5,6 +5,7 @@ import bcrypt from 'bcrypt';
 import { validationResult } from 'express-validator';
 import { generateToken } from '../utils/jwt.js';
 import { uploadToGoogleDrive } from '../utils/googleDrive.js';
+import { BlockchainHelper } from '../blockchain/BlockchainHelper.js';
 
 
 const sanitizeUser = (userInstance) => {
@@ -281,14 +282,6 @@ export const createCultivation = async (req, res) => {
         const farmerId = farmerProfiles[0].farmer_id;
         const { batch_no, farm_id, date_of_planting, seeding_source, type_of_fertilizers, pesticides, expected_harvest_date, no_of_trees } = req.body;
 
-        // Check if file was uploaded
-        if (!req.file) {
-            return res.status(400).json({ 
-                success: false,
-                message: 'Organic certification document is required' 
-            });
-        }
-
         // Verify that the farm belongs to this farmer
         const farmRecords = await db.select()
             .from(farms)
@@ -316,24 +309,24 @@ export const createCultivation = async (req, res) => {
             });
         }
 
-        // Upload file to Google Drive with unique filename using batch_no
+        // Upload file to Google Drive with unique filename using batch_no 
         let driveFileData = null;
-        try {
-            const customFileName = `organic-cert-${batch_no}`;
-            driveFileData = await uploadToGoogleDrive(req.file, 'Organic Certification', customFileName);
-        } catch (uploadError) {
-            console.error('Error uploading file to Google Drive:', uploadError);
-            return res.status(500).json({ 
-                success: false,
-                message: 'Failed to upload organic certification document to Google Drive',
-                error: uploadError.message
-            });
+        if (req.file) {
+            try {
+                const customFileName = `organic-cert-${batch_no}`;
+                driveFileData = await uploadToGoogleDrive(req.file, 'Organic Certification', customFileName);
+            } catch (uploadError) {
+                console.error('Error uploading file to Google Drive:', uploadError);
+                return res.status(500).json({ 
+                    success: false,
+                    message: 'Failed to upload organic certification document to Google Drive',
+                    error: uploadError.message
+                });
+            }
         }
 
-        // Create cultivation record in a transaction
         const result = await db.transaction(async (tx) => {
-            // Step 1: Create main record first with batch_no, farm_id, farmer_id, is_harvested=false
-            // These fields will be updated later when harvest and collection records are created
+            // create main record first with batch_no, farm_id, farmer_id, is_harvested=false
             await tx.insert(main).values({
                 batch_no: batch_no,
                 farm_id: farm_id,
@@ -341,19 +334,19 @@ export const createCultivation = async (req, res) => {
                 is_harvested: false
             });
 
-            // Step 2: Create cultivation record referencing batch_no
+            // create cultivation record referencing batch_no
             const newCultivation = await tx.insert(cultivation).values({
                 batch_no: batch_no,
                 date_of_planting,
                 seeding_source,
                 type_of_fertilizers,
                 pesticides,
-                organic_certification: driveFileData.webViewLink, // Store Google Drive link only
+                organic_certification: driveFileData ? driveFileData.webViewLink : null, // google drive link only
                 expected_harvest_date,
                 no_of_trees: no_of_trees
             }).returning();
 
-            // Step 3: Update main table with cultivation_id
+            // update main table with cultivation_id
             await tx.update(main)
                 .set({ 
                     cultivation_id: newCultivation[0].cultivation_id,
@@ -364,13 +357,37 @@ export const createCultivation = async (req, res) => {
             return newCultivation[0];
         });
 
-        res.status(201).json({
+        // writ cultivation on blockchain
+        const blockchainResult = await BlockchainHelper.recordCultivation(
+            {
+                farm_id: farm_id,
+                date_of_planting: date_of_planting,
+                seeding_source: seeding_source,
+                type_of_fertilizers: type_of_fertilizers,
+                pesticides: pesticides,
+                organic_certification: driveFileData ? driveFileData.webViewLink : null,
+                expected_harvest_date: expected_harvest_date,
+                no_of_trees: no_of_trees
+            },
+            batch_no,
+            req.user.user_id,
+            farmerId
+        );
+
+        const response = {
             success: true,
             message: 'Cultivation record created successfully',
             cultivation: result,
             batch_no: batch_no,
-            organic_certification_link: driveFileData.webViewLink
-        });
+            blockchain: blockchainResult
+        };
+
+        // Include organic certification link only if provided
+        if (driveFileData) {
+            response.organic_certification_link = driveFileData.webViewLink;
+        }
+
+        res.status(201).json(response);
     } catch (error) {
         console.error("Error creating cultivation:", error);
         res.status(500).json({ 
@@ -601,9 +618,8 @@ export const createHarvest = async (req, res) => {
             });
         }
 
-        // Create harvest record in a transaction
         const result = await db.transaction(async (tx) => {
-            // Step 1: Create harvest record
+            // create harvest record
             const newHarvest = await tx.insert(harvest).values({
                 batch_no: batch_no,
                 harvest_date,
@@ -611,7 +627,7 @@ export const createHarvest = async (req, res) => {
                 quantity: parseFloat(quantity)
             }).returning();
 
-            // Step 2: Update main table with harvest_id, is_harvested=true, and harvested_quantity
+            // update main table with harvest_id, is_harvested=true, and harvested_quantity
             await tx.update(main)
                 .set({ 
                     harvest_id: newHarvest[0].harvest_id,
@@ -624,11 +640,24 @@ export const createHarvest = async (req, res) => {
             return newHarvest[0];
         });
 
+        // write harvest on blockchain
+        const blockchainResult = await BlockchainHelper.recordHarvest(
+            {
+                harvest_date: harvest_date,
+                harvest_method: harvest_method,
+                quantity: quantity,
+                harvest_id: result.harvest_id
+            },
+            batch_no,
+            req.user.user_id
+        );
+
         res.status(201).json({
             success: true,
             message: 'Harvest record created successfully',
             harvest: result,
-            batch_no: batch_no
+            batch_no: batch_no,
+            blockchain: blockchainResult
         });
     } catch (error) {
         console.error("Error creating harvest:", error);

@@ -5,6 +5,7 @@ import bcrypt from 'bcrypt';
 import { validationResult } from 'express-validator';
 import { generateToken } from '../utils/jwt.js';
 import { uploadToGoogleDrive } from '../utils/googleDrive.js';
+import { BlockchainHelper } from '../blockchain/BlockchainHelper.js';
 
 const sanitizeUser = (userInstance) => {
     const { password_hash, ...userWithoutPassword } = userInstance;
@@ -73,7 +74,7 @@ export const registerExporter = async (req, res) => {
 
             await tx.insert(exporter_profile).values({
                 user_id: newUser[0].user_id,
-                exporter_license: licenseLink // Store Google Drive link
+                exporter_license: licenseLink // google drive link
             });
 
             return newUser[0];
@@ -316,17 +317,15 @@ export const markAsCollectedByExporter = async (req, res) => {
             });
         }
 
-        // Create export record in a transaction
         const result = await db.transaction(async (tx) => {
-            // Step 1: Create export_table record
-            // Note: exported_to and exported_date are required by schema, but will be updated in markAsExported
+            // create export_table record
             const newExport = await tx.insert(export_table).values({
                 batch_no: batch_no,
                 exporter_id: exporterId,
                 collected_date: collected_date
             }).returning();
 
-            // Step 2: Update main table with collected_by_exporter=true and export_id
+            // update main table
             await tx.update(main)
                 .set({ 
                     collected_by_exporter: true,
@@ -338,11 +337,24 @@ export const markAsCollectedByExporter = async (req, res) => {
             return newExport[0];
         });
 
+        // write export collection on blockchain
+        const blockchainResult = await BlockchainHelper.recordExportCollect(
+            {
+                collected_date: collected_date,
+                export_id: result.export_id
+            },
+            batch_no,
+            req.user.user_id,
+            exporterId,
+            batch.distributor_id
+        );
+
         res.status(201).json({
             success: true,
             message: 'Batch marked as collected by exporter successfully',
             export: result,
-            batch_no: batch_no
+            batch_no: batch_no,
+            blockchain: blockchainResult
         });
     } catch (error) {
         console.error("Error marking batch as collected by exporter:", error);
@@ -442,9 +454,9 @@ export const markAsExported = async (req, res) => {
             });
         }
 
-        // Update export and main tables in a transaction
+
         const result = await db.transaction(async (tx) => {
-            // Step 1: Update export_table with exported_to and exported_date
+            // update export_table with dates
             const updatedExport = await tx.update(export_table)
                 .set({ 
                     exported_to: exported_to,
@@ -454,7 +466,7 @@ export const markAsExported = async (req, res) => {
                 .where(eq(export_table.export_id, batch.export_id))
                 .returning();
 
-            // Step 2: Update main table with is_exported=true
+            // update main table
             await tx.update(main)
                 .set({ 
                     is_exported: true,
@@ -465,11 +477,24 @@ export const markAsExported = async (req, res) => {
             return updatedExport[0];
         });
 
+        // write export on blockchain
+        const blockchainResult = await BlockchainHelper.recordExport(
+            {
+                exported_to: exported_to,
+                exported_date: exported_date,
+                export_id: batch.export_id
+            },
+            batch_no,
+            req.user.user_id,
+            exporterId
+        );
+
         res.json({
             success: true,
             message: 'Batch marked as exported successfully',
             export: result,
-            batch_no: batch_no
+            batch_no: batch_no,
+            blockchain: blockchainResult
         });
     } catch (error) {
         console.error("Error marking batch as exported:", error);

@@ -5,6 +5,7 @@ import bcrypt from 'bcrypt';
 import { validationResult } from 'express-validator';
 import { generateToken } from '../utils/jwt.js';
 import { uploadToGoogleDrive } from '../utils/googleDrive.js';
+import { BlockchainHelper } from '../blockchain/BlockchainHelper.js';
 
 const sanitizeUser = (userInstance) => {
     const { password_hash, ...userWithoutPassword } = userInstance;
@@ -366,15 +367,14 @@ export const markAsInProcess = async (req, res) => {
             });
         }
 
-        // Create process record in a transaction
         const result = await db.transaction(async (tx) => {
-            // Step 1: Create process record
+            // create process record
             const newProcess = await tx.insert(process).values({
                 batch_no: batch_no,
                 processor_id: processorId
             }).returning();
 
-            // Step 2: Update main table with inProcess=true and process_id
+            // update main table with inProcess=true and process_id
             await tx.update(main)
                 .set({ 
                     inProcess: true,
@@ -476,9 +476,8 @@ export const markAsDried = async (req, res) => {
         }
         */
 
-        // Update process and main tables in a transaction
         const result = await db.transaction(async (tx) => {
-            // Step 1: Update process table
+            // update process table
             const updatedProcess = await tx.update(process)
                 .set({ 
                     isDried: true,
@@ -491,7 +490,7 @@ export const markAsDried = async (req, res) => {
                 .where(eq(process.process_id, batch.process_id))
                 .returning();
 
-            // Step 2: Update main table with dried_weight
+            // update main table with dried_weight
             await tx.update(main)
                 .set({ 
                     dried_weight: parseFloat(dried_weight),
@@ -502,11 +501,26 @@ export const markAsDried = async (req, res) => {
             return updatedProcess[0];
         });
 
+        // drying on blockchain
+        const blockchainResult = await BlockchainHelper.recordDrying(
+            {
+                dry_started_date: dry_started_date,
+                dry_ended_date: dry_ended_date,
+                moisture_content: moisture_content,
+                dried_weight: dried_weight,
+                process_id: batch.process_id
+            },
+            batch_no,
+            req.user.user_id,
+            batch.processor_id
+        );
+
         res.json({
             success: true,
             message: 'Batch marked as dried successfully',
             process: result,
-            batch_no: batch_no
+            batch_no: batch_no,
+            blockchain: blockchainResult
         });
     } catch (error) {
         console.error("Error marking batch as dried:", error);
@@ -647,11 +661,26 @@ export const markAsGraded = async (req, res) => {
             .where(eq(process.process_id, batch.process_id))
             .returning();
 
+        // write grading on blockchain
+        const blockchainResult = await BlockchainHelper.recordGrading(
+            {
+                graded_date: graded_date,
+                grader_id: grader_id,
+                grader_sign: graderSignLink,
+                process_id: batch.process_id
+            },
+            batch_no,
+            req.user.user_id,
+            batch.processor_id,
+            graderSignLink ? [graderSignLink] : []
+        );
+
         res.json({
             success: true,
             message: 'Batch marked as graded successfully',
             process: result[0],
-            batch_no: batch_no
+            batch_no: batch_no,
+            blockchain: blockchainResult
         });
     } catch (error) {
         console.error("Error marking batch as graded:", error);
@@ -768,11 +797,26 @@ export const markAsPacked = async (req, res) => {
             return updatedProcess[0];
         });
 
+        // record packing on blockchain
+        const blockchainResult = await BlockchainHelper.recordPacking(
+            {
+                packed_date: packed_date,
+                packed_by: packed_by,
+                packing_type: packing_type,
+                package_weight: package_weight,
+                process_id: batch.process_id
+            },
+            batch_no,
+            req.user.user_id,
+            batch.processor_id
+        );
+
         res.json({
             success: true,
-            message: 'Batch packed and marked as processed successfully! Ready for distribution.',
-            process: result,
-            batch_no: batch_no
+            message: 'Batch marked as packed successfully',
+            process: result[0],
+            batch_no: batch_no,
+            blockchain: blockchainResult
         });
     } catch (error) {
         console.error("Error marking batch as packed:", error);
@@ -862,9 +906,8 @@ export const markAsProcessed = async (req, res) => {
             });
         }
 
-        // Update process and main tables in a transaction
         const result = await db.transaction(async (tx) => {
-            // Step 1: Update process table with processed_date
+            // update process table with processed_date
             const updatedProcess = await tx.update(process)
                 .set({ 
                     processed_date: processed_date || new Date(),
@@ -873,7 +916,7 @@ export const markAsProcessed = async (req, res) => {
                 .where(eq(process.process_id, batch.process_id))
                 .returning();
 
-            // Step 2: Update main table with isProcessed=true
+            // update main table with isProcessed=true
             await tx.update(main)
                 .set({ 
                     isProcessed: true,
