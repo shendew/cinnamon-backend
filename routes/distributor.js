@@ -5,6 +5,8 @@ import {
     loginDistributor, 
     getDistributorProfile,
     getAvailableBatches,
+    getMyDistributions,
+    getDistributionDetails,
     markAsCollectedByDistributor,
     markAsDistributed
 } from '../controllers/distributorController.js';
@@ -27,6 +29,10 @@ router.get('/profile', protect, getDistributorProfile);
 
 router.get('/batches/available', protect, getAvailableBatches);
 
+router.get('/distributions', protect, getMyDistributions);
+
+router.get('/distributions/:batch_no', protect, getDistributionDetails);
+
 router.post('/collect', protect, [
     check('batch_no', 'Batch number is required').not().isEmpty(),
     check('batch_no', 'Batch number must be a valid string').isString(),
@@ -42,4 +48,3 @@ router.post('/distribute', protect, [
 ], markAsDistributed);
 
 export default router;
-

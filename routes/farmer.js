@@ -1,7 +1,7 @@
 
 import express from 'express';
 const router = express.Router();
-import { registerFarmer, loginFarmer, createFarm, createCultivation, createHarvest, getFarmerProfile } from '../controllers/farmerController.js';
+import { registerFarmer, loginFarmer, createFarm, getFarms, createCultivation, getCultivations, getCultivationByBatchNo, createHarvest, getFarmerProfile } from '../controllers/farmerController.js';
 import { protect } from '../middleware/auth.js';
 import { check } from 'express-validator';
 import upload from '../middleware/upload.js';
@@ -30,6 +30,9 @@ router.post('/farms', protect, [
     check('area_acres', 'Area in acres is required').not().isEmpty(),
     check('area_acres', 'Area must be a valid number').isFloat({ min: 0 })
 ], createFarm);
+
+// Get all farms for the logged-in farmer
+router.get('/farms', protect, getFarms);
 
 // Multer error handling middleware
 const handleMulterError = (err, req, res, next) => {
@@ -78,6 +81,12 @@ router.post('/cultivations',
     ], 
     createCultivation
 );
+
+// Get all cultivations for the logged-in farmer
+router.get('/cultivations', protect, getCultivations);
+
+// Get a specific cultivation by batch number
+router.get('/cultivations/:batch_no', protect, getCultivationByBatchNo);
 
 router.post('/harvests', protect, [
     check('batch_no', 'Batch number is required').not().isEmpty(),

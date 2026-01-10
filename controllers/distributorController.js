@@ -1,5 +1,5 @@
 import { db } from '../config/db.js';
-import { user, distributor_profile, main, distribute_table } from '../src/db/schema.js';
+import { user, distributor_profile, main, distribute_table, farms, farmer_profile, cultivation, harvest, collect_table, collector_profile, transport, process } from '../src/db/schema.js';
 import { eq, and, sql } from 'drizzle-orm';
 import bcrypt from 'bcrypt';
 import { validationResult } from 'express-validator';
@@ -217,6 +217,253 @@ export const getAvailableBatches = async (req, res) => {
         res.status(500).json({ 
             success: false,
             message: "Failed to fetch available batches", 
+            error: error.message 
+        });
+    }
+};
+
+// Get distributor's collected batches (my distributions)
+export const getMyDistributions = async (req, res) => {
+    try {
+        // Verify user is a distributor
+        const userRoleId = Number(req.user.role_id);
+        
+        if (isNaN(userRoleId) || userRoleId !== 4) {
+            return res.status(403).json({ 
+                success: false,
+                message: 'Only distributors can view their distributions' 
+            });
+        }
+
+        // Get distributor_id from distributor_profile using user_id
+        const distributorProfiles = await db.select()
+            .from(distributor_profile)
+            .where(eq(distributor_profile.user_id, req.user.user_id));
+
+        if (distributorProfiles.length === 0) {
+            return res.status(404).json({ 
+                success: false,
+                message: 'Distributor profile not found' 
+            });
+        }
+
+        const distributorId = distributorProfiles[0].distributor_id;
+
+        // Get all distributions for this distributor with batch info
+        const distributions = await db.select({
+            distribute_id: distribute_table.distribute_id,
+            batch_no: distribute_table.batch_no,
+            collected_date: distribute_table.collected_date,
+            distributed_date: distribute_table.distributed_date,
+            created_at: distribute_table.created_at,
+            // Main table info
+            harvested_quantity: main.harvested_quantity,
+            is_distributed: main.is_distributed
+        })
+            .from(distribute_table)
+            .leftJoin(main, eq(distribute_table.batch_no, main.batch_no))
+            .where(eq(distribute_table.distributor_id, distributorId))
+            .orderBy(sql`${distribute_table.created_at} DESC`);
+
+        // Transform to include status
+        const distributionsWithStatus = distributions.map(d => ({
+            ...d,
+            status: d.is_distributed ? 'distributed' : 'collected'
+        }));
+
+        res.json({
+            success: true,
+            distributions: distributionsWithStatus
+        });
+    } catch (error) {
+        console.error("Error fetching distributor's distributions:", error);
+        res.status(500).json({ 
+            success: false,
+            message: "Failed to fetch distributions", 
+            error: error.message 
+        });
+    }
+};
+
+// Get distribution details with batch chain history
+export const getDistributionDetails = async (req, res) => {
+    try {
+        const { batch_no } = req.params;
+        
+        // Verify user is a distributor
+        const userRoleId = Number(req.user.role_id);
+        
+        if (isNaN(userRoleId) || userRoleId !== 4) {
+            return res.status(403).json({ 
+                success: false,
+                message: 'Only distributors can view distribution details' 
+            });
+        }
+
+        // Get distributor_id from distributor_profile
+        const distributorProfiles = await db.select()
+            .from(distributor_profile)
+            .where(eq(distributor_profile.user_id, req.user.user_id));
+
+        if (distributorProfiles.length === 0) {
+            return res.status(404).json({ 
+                success: false,
+                message: 'Distributor profile not found' 
+            });
+        }
+
+        const distributorId = distributorProfiles[0].distributor_id;
+
+        // Get distribution record
+        const distributeRecords = await db.select()
+            .from(distribute_table)
+            .where(and(
+                eq(distribute_table.batch_no, batch_no),
+                eq(distribute_table.distributor_id, distributorId)
+            ));
+
+        if (distributeRecords.length === 0) {
+            return res.status(404).json({ 
+                success: false,
+                message: 'Distribution not found or you do not have access to this batch' 
+            });
+        }
+
+        const distribution = distributeRecords[0];
+
+        // Get batch info from main table
+        const batchRecords = await db.select()
+            .from(main)
+            .where(eq(main.batch_no, batch_no));
+
+        if (batchRecords.length === 0) {
+            return res.status(404).json({ 
+                success: false,
+                message: 'Batch not found' 
+            });
+        }
+
+        const batch = batchRecords[0];
+
+        // Get farm info
+        let farmData = null;
+        if (batch.farm_id) {
+            const farmRecords = await db.select().from(farms).where(eq(farms.farm_id, batch.farm_id));
+            if (farmRecords.length > 0) {
+                farmData = farmRecords[0];
+            }
+        }
+
+        // Get farmer info
+        let farmerData = null;
+        if (batch.farmer_id) {
+            const farmerRecords = await db.select({
+                farmer_id: farmer_profile.farmer_id,
+                user_id: farmer_profile.user_id,
+                name: user.name,
+                phone: user.phone
+            })
+            .from(farmer_profile)
+            .leftJoin(user, eq(farmer_profile.user_id, user.user_id))
+            .where(eq(farmer_profile.farmer_id, batch.farmer_id));
+            
+            if (farmerRecords.length > 0) {
+                farmerData = farmerRecords[0];
+            }
+        }
+
+        // Get cultivation info
+        let cultivationData = null;
+        if (batch.cultivation_id) {
+            const cultivationRecords = await db.select().from(cultivation).where(eq(cultivation.cultivation_id, batch.cultivation_id));
+            if (cultivationRecords.length > 0) {
+                cultivationData = cultivationRecords[0];
+            }
+        }
+
+        // Get harvest info
+        let harvestData = null;
+        if (batch.harvest_id) {
+            const harvestRecords = await db.select().from(harvest).where(eq(harvest.harvest_id, batch.harvest_id));
+            if (harvestRecords.length > 0) {
+                harvestData = harvestRecords[0];
+            }
+        }
+
+        // Get collection info
+        let collectionData = null;
+        let collectorData = null;
+        if (batch.collection_id) {
+            const collectionRecords = await db.select().from(collect_table).where(eq(collect_table.collection_id, batch.collection_id));
+            if (collectionRecords.length > 0) {
+                collectionData = collectionRecords[0];
+                
+                // Get collector info
+                if (collectionData.collector_id) {
+                    const collectorRecords = await db.select({
+                        collector_id: collector_profile.collector_id,
+                        user_id: collector_profile.user_id,
+                        name: user.name
+                    })
+                    .from(collector_profile)
+                    .leftJoin(user, eq(collector_profile.user_id, user.user_id))
+                    .where(eq(collector_profile.collector_id, collectionData.collector_id));
+                    
+                    if (collectorRecords.length > 0) {
+                        collectorData = collectorRecords[0];
+                    }
+                }
+            }
+        }
+
+        // Get transport info
+        let transportData = null;
+        if (batch.transport_id) {
+            const transportRecords = await db.select().from(transport).where(eq(transport.transport_id, batch.transport_id));
+            if (transportRecords.length > 0) {
+                transportData = transportRecords[0];
+            }
+        }
+
+        // Get process info
+        let processData = null;
+        if (batch.process_id) {
+            const processRecords = await db.select().from(process).where(eq(process.process_id, batch.process_id));
+            if (processRecords.length > 0) {
+                processData = processRecords[0];
+            }
+        }
+
+        res.json({
+            success: true,
+            batch: {
+                batch_no: batch.batch_no,
+                harvested_quantity: batch.harvested_quantity,
+                dried_weight: batch.dried_weight,
+                isProcessed: batch.isProcessed,
+                is_distributed: batch.is_distributed,
+                created_at: batch.created_at
+            },
+            farm: farmData,
+            farmer: farmerData,
+            cultivation: cultivationData,
+            harvest: harvestData,
+            collection: collectionData,
+            collector: collectorData,
+            transport: transportData,
+            process: processData,
+            distribution: {
+                distribute_id: distribution.distribute_id,
+                collected_date: distribution.collected_date,
+                distributed_date: distribution.distributed_date,
+                created_at: distribution.created_at
+            }
+        });
+    } catch (error) {
+        console.error("Error fetching distribution details:", error);
+        res.status(500).json({ 
+            success: false,
+            message: "Failed to fetch distribution details", 
             error: error.message 
         });
     }

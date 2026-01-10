@@ -6,7 +6,9 @@ import {
     getExporterProfile,
     getAvailableBatches,
     markAsCollectedByExporter,
-    markAsExported
+    markAsExported,
+    getMyExports,
+    getExportDetails
 } from '../controllers/exportController.js';
 import { protect } from '../middleware/auth.js';
 import { check } from 'express-validator';
@@ -25,6 +27,10 @@ router.post('/login', [
 ], loginExporter);
 
 router.get('/profile', protect, getExporterProfile);
+
+router.get('/exports', protect, getMyExports);
+
+router.get('/export/details/:batchNo', protect, getExportDetails);
 
 router.get('/batches/available', protect, getAvailableBatches);
 

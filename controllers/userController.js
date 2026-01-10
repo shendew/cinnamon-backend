@@ -161,7 +161,7 @@ export const updateUserProfile = async (req, res) => {
         }
 
         const updatedUser = await db.update(user)
-            .set({ name, email, phone, updated_at: new Date() })
+            .set({ name, email, phone, updated_at: new Date().toISOString() })
             .where(eq(user.user_id, req.user.user_id))
             .returning();
 

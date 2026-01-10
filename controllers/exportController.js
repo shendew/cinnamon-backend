@@ -1,5 +1,5 @@
 import { db } from '../config/db.js';
-import { user, exporter_profile, main, export_table } from '../src/db/schema.js';
+import { user, exporter_profile, main, export_table, farms, farmer_profile, cultivation, harvest, collect_table, collector_profile, transport, process, distribute_table } from '../src/db/schema.js';
 import { eq, and, sql } from 'drizzle-orm';
 import bcrypt from 'bcrypt';
 import { validationResult } from 'express-validator';
@@ -506,3 +506,241 @@ export const markAsExported = async (req, res) => {
     }
 };
 
+
+// Get exporter's collected/exported batches
+export const getMyExports = async (req, res) => {
+    try {
+        // Verify user is an exporter
+        const userRoleId = Number(req.user.role_id);
+        
+        if (isNaN(userRoleId) || userRoleId !== 5) {
+            return res.status(403).json({ 
+                success: false,
+                message: 'Only exporters can view their exports' 
+            });
+        }
+
+        // Get exporter_id from exporter_profile using user_id
+        const exporterProfiles = await db.select()
+            .from(exporter_profile)
+            .where(eq(exporter_profile.user_id, req.user.user_id));
+
+        if (exporterProfiles.length === 0) {
+            return res.status(404).json({ 
+                success: false,
+                message: 'Exporter profile not found' 
+            });
+        }
+
+        const exporterId = exporterProfiles[0].exporter_id;
+
+        // Get all exports for this exporter with batch info
+        const exports = await db.select({
+            export_id: export_table.export_id,
+            batch_no: export_table.batch_no,
+            collected_date: export_table.collected_date,
+            exported_to: export_table.exported_to,
+            exported_date: export_table.exported_date,
+            created_at: export_table.created_at,
+            // Main table info
+            harvested_quantity: main.harvested_quantity,
+            dried_weight: main.dried_weight,
+            is_exported: main.is_exported
+        })
+            .from(export_table)
+            .leftJoin(main, eq(export_table.batch_no, main.batch_no))
+            .where(eq(export_table.exporter_id, exporterId))
+            .orderBy(sql`${export_table.created_at} DESC`);
+
+        // Transform to include status
+        const exportsWithStatus = exports.map(e => ({
+            ...e,
+            status: e.is_exported ? 'exported' : 'collected'
+        }));
+
+        res.json({
+            success: true,
+            exports: exportsWithStatus
+        });
+    } catch (error) {
+        console.error("Error fetching exporter's exports:", error);
+        res.status(500).json({ 
+            success: false,
+            message: "Failed to fetch exports", 
+            error: error.message 
+        });
+    }
+};
+
+// Get export details with batch chain history
+export const getExportDetails = async (req, res) => {
+    try {
+        const { batchNo } = req.params;
+        
+        // Verify user is an exporter
+        const userRoleId = Number(req.user.role_id);
+        
+        if (isNaN(userRoleId) || userRoleId !== 5) {
+            return res.status(403).json({ 
+                success: false,
+                message: 'Only exporters can view export details' 
+            });
+        }
+
+        // Get exporter_id from exporter_profile
+        const exporterProfiles = await db.select()
+            .from(exporter_profile)
+            .where(eq(exporter_profile.user_id, req.user.user_id));
+
+        if (exporterProfiles.length === 0) {
+            return res.status(404).json({ 
+                success: false,
+                message: 'Exporter profile not found' 
+            });
+        }
+
+        const exporterId = exporterProfiles[0].exporter_id;
+
+        // Get export record
+        const exportRecords = await db.select()
+            .from(export_table)
+            .where(and(
+                eq(export_table.batch_no, batchNo),
+                eq(export_table.exporter_id, exporterId)
+            ));
+
+        if (exportRecords.length === 0) {
+            return res.status(404).json({ 
+                success: false,
+                message: 'Export not found or you do not have access to this batch' 
+            });
+        }
+
+        const exportData = exportRecords[0];
+
+        // Get batch info from main table
+        const batchRecords = await db.select()
+            .from(main)
+            .where(eq(main.batch_no, batchNo));
+
+        if (batchRecords.length === 0) {
+            return res.status(404).json({ 
+                success: false,
+                message: 'Batch not found' 
+            });
+        }
+
+        const batch = batchRecords[0];
+
+        // CHAIN DATA (Similar to distributor but including distribution)
+        
+        // Get farm info
+        let farmData = null;
+        if (batch.farm_id) {
+            const farmRecords = await db.select().from(farms).where(eq(farms.farm_id, batch.farm_id));
+            if (farmRecords.length > 0) farmData = farmRecords[0];
+        }
+
+        // Get farmer info
+        let farmerData = null;
+        if (batch.farmer_id) {
+            const farmerRecords = await db.select({
+                farmer_id: farmer_profile.farmer_id,
+                user_id: farmer_profile.user_id,
+                name: user.name,
+                phone: user.phone
+            })
+            .from(farmer_profile)
+            .leftJoin(user, eq(farmer_profile.user_id, user.user_id))
+            .where(eq(farmer_profile.farmer_id, batch.farmer_id));
+            if (farmerRecords.length > 0) farmerData = farmerRecords[0];
+        }
+
+        // Get cultivation info
+        let cultivationData = null;
+        if (batch.cultivation_id) {
+            const cultivationRecords = await db.select().from(cultivation).where(eq(cultivation.cultivation_id, batch.cultivation_id));
+            if (cultivationRecords.length > 0) cultivationData = cultivationRecords[0];
+        }
+
+        // Get harvest info
+        let harvestData = null;
+        if (batch.harvest_id) {
+            const harvestRecords = await db.select().from(harvest).where(eq(harvest.harvest_id, batch.harvest_id));
+            if (harvestRecords.length > 0) harvestData = harvestRecords[0];
+        }
+
+        // Get collection info
+        let collectionData = null;
+        let collectorData = null;
+        if (batch.collection_id) {
+            const collectionRecords = await db.select().from(collect_table).where(eq(collect_table.collection_id, batch.collection_id));
+            if (collectionRecords.length > 0) {
+                collectionData = collectionRecords[0];
+                if (collectionData.collector_id) {
+                    const collectorRecords = await db.select({
+                        collector_id: collector_profile.collector_id,
+                        user_id: collector_profile.user_id,
+                        name: user.name
+                    })
+                    .from(collector_profile)
+                    .leftJoin(user, eq(collector_profile.user_id, user.user_id))
+                    .where(eq(collector_profile.collector_id, collectionData.collector_id));
+                    if (collectorRecords.length > 0) collectorData = collectorRecords[0];
+                }
+            }
+        }
+
+        // Get transport info
+        let transportData = null;
+        if (batch.transport_id) {
+            const transportRecords = await db.select().from(transport).where(eq(transport.transport_id, batch.transport_id));
+            if (transportRecords.length > 0) transportData = transportRecords[0];
+        }
+
+        // Get process info
+        let processData = null;
+        if (batch.process_id) {
+            const processRecords = await db.select().from(process).where(eq(process.process_id, batch.process_id));
+            if (processRecords.length > 0) processData = processRecords[0];
+        }
+
+        // Get distribution info (Crucial for exporter)
+        let distributionData = null;
+        if (batch.distribute_id) {
+            const distributionRecords = await db.select().from(distribute_table).where(eq(distribute_table.distribute_id, batch.distribute_id));
+            if (distributionRecords.length > 0) distributionData = distributionRecords[0];
+        }
+
+        res.json({
+            success: true,
+            batch: {
+                batch_no: batch.batch_no,
+                harvested_quantity: batch.harvested_quantity,
+                dried_weight: batch.dried_weight,
+                isProcessed: batch.isProcessed,
+                is_distributed: batch.is_distributed,
+                collected_by_exporter: batch.collected_by_exporter,
+                is_exported: batch.is_exported,
+                created_at: batch.created_at
+            },
+            farm: farmData,
+            farmer: farmerData,
+            cultivation: cultivationData,
+            harvest: harvestData,
+            collection: collectionData,
+            collector: collectorData,
+            transport: transportData,
+            process: processData,
+            distribution: distributionData,
+            export: exportData
+        });
+    } catch (error) {
+        console.error("Error fetching export details:", error);
+        res.status(500).json({ 
+            success: false,
+            message: "Failed to fetch export details", 
+            error: error.message 
+        });
+    }
+};
